@@ -1,7 +1,8 @@
 'use strict';
 
 const assert = require('assert');
-const LobbyStore = require('../lobby-core.cjs').LobbyStore;
+const gameCore = require('../lobby-core.cjs');
+const LobbyStore = gameCore.LobbyStore;
 
 const store = new LobbyStore();
 const host = store.create({ nickname: 'Nova', color: 'sky' });
@@ -18,6 +19,15 @@ assert.strictEqual(started.phase, 'PLAYING');
 assert.strictEqual(started.players.length, 4, 'Bots fill missing seats');
 assert.strictEqual(started.players.filter(function (p) { return p.isBot; }).length, 2);
 assert.strictEqual(started.selfRole === 'CREW' || started.selfRole === 'IMPOSTOR', true);
+assert.strictEqual(gameCore.isWalkable(15000, 8000), true, 'Command hub is walkable');
+assert.strictEqual(gameCore.isWalkable(50, 50), false, 'Empty space outside rooms is blocked');
+
+const hostState = store.byToken(host.token).player;
+hostState.x = 12400;
+hostState.y = 6200;
+const beforeWallMove = { x: hostState.x, y: hostState.y };
+store.move(host.token, { dx: -1, dy: -1 });
+assert.deepStrictEqual({ x: hostState.x, y: hostState.y }, beforeWallMove, 'Server rejects movement through a wall');
 
 const roles = [store.viewForToken(host.token).selfRole, store.viewForToken(guest.token).selfRole];
 assert.strictEqual(roles.filter(function (role) { return role === 'IMPOSTOR'; }).length, 1, 'Impostor is a human');

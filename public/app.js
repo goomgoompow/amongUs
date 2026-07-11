@@ -107,6 +107,19 @@ function renderGame(room) {
   $('#position').textContent = me ? 'X ' + Math.round(me.x) + ' / Y ' + Math.round(me.y) : '';
   $('#minimap-player').style.left = (me ? me.x / room.world.width * 100 : 50) + '%';
   $('#minimap-player').style.top = (me ? me.y / room.world.height * 100 : 50) + '%';
+  $('#corridors-layer').innerHTML = '';
+  room.corridors.forEach(function (corridor) {
+    const centerX = corridor.x + corridor.w / 2;
+    const centerY = corridor.y + corridor.h / 2;
+    if (!visible(centerX, centerY, Math.max(corridor.w, corridor.h))) return;
+    const node = document.createElement('div');
+    node.className = 'world-corridor';
+    node.style.left = ((corridor.x - left) * scale) + 'px';
+    node.style.top = ((corridor.y - top) * scale) + 'px';
+    node.style.width = (corridor.w * scale) + 'px';
+    node.style.height = (corridor.h * scale) + 'px';
+    $('#corridors-layer').appendChild(node);
+  });
   $('#rooms-layer').innerHTML = '';
   room.rooms.forEach(function (worldRoom) {
     const centerX = worldRoom.x + worldRoom.w / 2;

@@ -137,6 +137,12 @@ select {
   border: 4px solid rgba(118,157,190,.23); background: rgba(29,58,80,.48); border-radius: 28px;
   box-shadow: inset 0 0 60px rgba(76,145,170,.08), 0 0 0 18px rgba(5,12,20,.36);
 }
+.world-corridor {
+  position: absolute; z-index: 0; border: 3px solid rgba(118,157,190,.2);
+  background: repeating-linear-gradient(90deg, rgba(32,64,84,.58) 0 80px, rgba(24,51,70,.58) 80px 84px);
+  box-shadow: inset 0 0 28px rgba(0,0,0,.35);
+}
+.world-room { z-index: 1; }
 .world-room::before, .world-room::after {
   content: ""; position: absolute; background: rgba(100,228,210,.1); border: 1px solid rgba(100,228,210,.13);
 }

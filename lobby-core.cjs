@@ -23,22 +23,47 @@ const ROOMS = [
   { id: 'lifeboat', label: 'LIFEBOATS', x: 25000, y: 13800, w: 3500, h: 3500 }
 ];
 const TASKS = [
-  { id: 'reactor', label: 'Calibrate reactor', x: 2800, y: 2100 },
-  { id: 'engine', label: 'Prime engine', x: 7900, y: 1900 },
-  { id: 'medical', label: 'Scan samples', x: 12600, y: 2200 },
-  { id: 'laboratory', label: 'Sort specimens', x: 18100, y: 2100 },
-  { id: 'navigation', label: 'Align navigation', x: 25800, y: 2200 },
-  { id: 'electrical', label: 'Repair relay', x: 3500, y: 8400 },
-  { id: 'security', label: 'Review sensors', x: 8900, y: 7900 },
-  { id: 'command', label: 'Upload flight data', x: 15000, y: 8000 },
-  { id: 'communications', label: 'Tune antenna', x: 22000, y: 8100 },
-  { id: 'oxygen', label: 'Clean oxygen filter', x: 26900, y: 8100 },
-  { id: 'waste', label: 'Empty waste chute', x: 3200, y: 15500 },
-  { id: 'storage', label: 'Route supplies', x: 9000, y: 15300 },
-  { id: 'quarters', label: 'Restore life support', x: 14900, y: 15300 },
-  { id: 'cargo', label: 'Secure cargo', x: 20900, y: 15100 },
-  { id: 'lifeboat', label: 'Inspect lifeboat', x: 26700, y: 15500 }
+  { id: 'reactor', roomId: 'reactor', label: 'Calibrate reactor', x: 2800, y: 2100 },
+  { id: 'engine', roomId: 'engine', label: 'Prime engine', x: 7900, y: 1900 },
+  { id: 'medical', roomId: 'medical', label: 'Scan samples', x: 12600, y: 2200 },
+  { id: 'laboratory', roomId: 'laboratory', label: 'Sort specimens', x: 18100, y: 2100 },
+  { id: 'navigation', roomId: 'navigation', label: 'Align navigation', x: 25800, y: 2200 },
+  { id: 'electrical', roomId: 'electrical', label: 'Repair relay', x: 3500, y: 8400 },
+  { id: 'security', roomId: 'security', label: 'Review sensors', x: 8900, y: 7900 },
+  { id: 'command', roomId: 'command', label: 'Upload flight data', x: 15000, y: 8000 },
+  { id: 'communications', roomId: 'communications', label: 'Tune antenna', x: 22000, y: 8100 },
+  { id: 'oxygen', roomId: 'oxygen', label: 'Clean oxygen filter', x: 26900, y: 8100 },
+  { id: 'waste', roomId: 'waste', label: 'Empty waste chute', x: 3200, y: 15500 },
+  { id: 'storage', roomId: 'storage', label: 'Route supplies', x: 9000, y: 15300 },
+  { id: 'quarters', roomId: 'quarters', label: 'Restore life support', x: 14900, y: 15300 },
+  { id: 'cargo', roomId: 'cargo', label: 'Secure cargo', x: 20900, y: 15100 },
+  { id: 'lifeboat', roomId: 'lifeboat', label: 'Inspect lifeboat', x: 26700, y: 15500 }
 ];
+const ROOM_LINKS = [
+  ['reactor', 'engine'], ['engine', 'medical'], ['medical', 'laboratory'], ['laboratory', 'navigation'],
+  ['electrical', 'security'], ['security', 'command'], ['command', 'communications'], ['communications', 'oxygen'],
+  ['waste', 'storage'], ['storage', 'quarters'], ['quarters', 'cargo'], ['cargo', 'lifeboat'],
+  ['reactor', 'electrical'], ['engine', 'security'], ['medical', 'command'], ['laboratory', 'communications'],
+  ['navigation', 'oxygen'], ['electrical', 'waste'], ['security', 'storage'], ['command', 'quarters'],
+  ['communications', 'cargo'], ['oxygen', 'lifeboat']
+];
+function roomById(roomId) { return ROOMS.find(function (room) { return room.id === roomId; }); }
+function roomCenter(roomId) {
+  const room = roomById(roomId);
+  return { x: room.x + room.w / 2, y: room.y + room.h / 2, roomId: roomId };
+}
+function segmentRect(a, b, width) {
+  return { x: Math.min(a.x, b.x) - width / 2, y: Math.min(a.y, b.y) - width / 2,
+    w: Math.abs(a.x - b.x) + width, h: Math.abs(a.y - b.y) + width };
+}
+const CORRIDORS = [];
+ROOM_LINKS.forEach(function (link, index) {
+  const a = roomCenter(link[0]);
+  const b = roomCenter(link[1]);
+  const bend = { x: b.x, y: a.y };
+  CORRIDORS.push(Object.assign({ id: 'corridor-' + index + '-a' }, segmentRect(a, bend, 820)));
+  CORRIDORS.push(Object.assign({ id: 'corridor-' + index + '-b' }, segmentRect(bend, b, 820)));
+});
 const SPAWNS = [
   [14300, 7600], [15000, 7600], [15700, 7600], [14300, 8400], [15000, 8400],
   [15700, 8400], [14650, 9100], [15350, 9100], [13600, 8400], [16400, 8400]
@@ -47,6 +72,55 @@ const SPAWNS = [
 function id(bytes) { return crypto.randomBytes(bytes || 18).toString('hex'); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function pointInRect(x, y, rect, margin) {
+  const pad = margin || 0;
+  return x >= rect.x + pad && x <= rect.x + rect.w - pad && y >= rect.y + pad && y <= rect.y + rect.h - pad;
+}
+function isWalkable(x, y) {
+  return ROOMS.some(function (room) { return pointInRect(x, y, room, 90); }) ||
+    CORRIDORS.some(function (corridor) { return pointInRect(x, y, corridor, 90); });
+}
+function roomAt(x, y) {
+  const room = ROOMS.find(function (candidate) { return pointInRect(x, y, candidate, 0); });
+  return room ? room.id : 'command';
+}
+function roomPath(startId, goalId) {
+  if (startId === goalId) return [startId];
+  const queue = [[startId]];
+  const visited = new Set([startId]);
+  while (queue.length) {
+    const path = queue.shift();
+    const current = path[path.length - 1];
+    const neighbors = ROOM_LINKS.filter(function (link) { return link[0] === current || link[1] === current; })
+      .map(function (link) { return link[0] === current ? link[1] : link[0]; });
+    for (const next of neighbors) {
+      if (visited.has(next)) continue;
+      const result = path.concat(next);
+      if (next === goalId) return result;
+      visited.add(next);
+      queue.push(result);
+    }
+  }
+  return [startId, goalId];
+}
+function pathWaypoints(start, targetRoomId) {
+  const ids = roomPath(roomAt(start.x, start.y), targetRoomId);
+  const startCenter = roomCenter(ids[0]);
+  const points = [{ x: startCenter.x, y: startCenter.y }];
+  ids.slice(1).forEach(function (roomId, index) {
+    const previousId = ids[index];
+    const next = roomCenter(roomId);
+    const link = ROOM_LINKS.find(function (candidate) {
+      return (candidate[0] === previousId && candidate[1] === roomId) ||
+        (candidate[1] === previousId && candidate[0] === roomId);
+    });
+    const originalA = roomCenter(link[0]);
+    const originalB = roomCenter(link[1]);
+    points.push({ x: originalB.x, y: originalA.y });
+    points.push({ x: next.x, y: next.y });
+  });
+  return points;
+}
 
 function nickname(value) {
   const name = String(value || '').trim().replace(/\s+/g, ' ');
@@ -76,6 +150,7 @@ function roomView(room, viewerId) {
     selfRole: room.phase === 'PLAYING' && viewer ? viewer.role : null,
     world: room.phase === 'PLAYING' ? WORLD : null,
     rooms: room.phase === 'PLAYING' ? ROOMS : [],
+    corridors: room.phase === 'PLAYING' ? CORRIDORS : [],
     tasks: room.phase === 'PLAYING' ? TASKS.map(function (task) {
       return { id: task.id, label: task.label, x: task.x, y: task.y };
     }) : [],
@@ -189,8 +264,10 @@ class LobbyStore {
     const dx = clamp(Number(input.dx) || 0, -1, 1);
     const dy = clamp(Number(input.dy) || 0, -1, 1);
     const length = Math.hypot(dx, dy) || 1;
-    found.player.x = clamp(found.player.x + (dx / length) * 180, 120, WORLD.width - 120);
-    found.player.y = clamp(found.player.y + (dy / length) * 180, 120, WORLD.height - 120);
+    const nextX = clamp(found.player.x + (dx / length) * 180, 120, WORLD.width - 120);
+    const nextY = clamp(found.player.y + (dy / length) * 180, 120, WORLD.height - 120);
+    if (isWalkable(nextX, found.player.y)) found.player.x = nextX;
+    if (isWalkable(found.player.x, nextY)) found.player.y = nextY;
     this._touch(found.room);
     return roomView(found.room, found.player.id);
   }
@@ -218,15 +295,21 @@ class LobbyStore {
           const available = TASKS.filter(function (t) { return !bot.completedTaskIds.has(t.id); });
           bot.botTarget = available[Math.floor(Math.random() * available.length)].id;
           bot.botWork = 0;
+          bot.botPath = pathWaypoints(bot, TASKS.find(function (t) { return t.id === bot.botTarget; }).roomId);
         }
         const task = TASKS.find(function (t) { return t.id === bot.botTarget; });
-        const dx = task.x - bot.x;
-        const dy = task.y - bot.y;
+        while (bot.botPath && bot.botPath.length && distance(bot, bot.botPath[0]) < 150) bot.botPath.shift();
+        const destination = bot.botPath && bot.botPath.length ? bot.botPath[0] : task;
+        const dx = destination.x - bot.x;
+        const dy = destination.y - bot.y;
         const dist = Math.hypot(dx, dy);
-        if (dist > 180) {
+        if (distance(bot, task) > 180 || (bot.botPath && bot.botPath.length)) {
           const speed = 760 * seconds;
-          bot.x += dx / dist * Math.min(speed, dist);
-          bot.y += dy / dist * Math.min(speed, dist);
+          const step = Math.min(speed, dist);
+          const nextX = bot.x + dx / (dist || 1) * step;
+          const nextY = bot.y + dy / (dist || 1) * step;
+          if (isWalkable(nextX, bot.y)) bot.x = nextX;
+          if (isWalkable(bot.x, nextY)) bot.y = nextY;
         } else {
           bot.botWork += seconds;
           if (bot.botWork >= 3) this._finishTask(room, bot, task.id);
@@ -334,4 +417,4 @@ class LobbyStore {
   _touch(room) { room.revision += 1; }
 }
 
-module.exports = { LobbyStore: LobbyStore, roomView: roomView, TASKS: TASKS, ROOMS: ROOMS, WORLD: WORLD };
+module.exports = { LobbyStore: LobbyStore, roomView: roomView, TASKS: TASKS, ROOMS: ROOMS, CORRIDORS: CORRIDORS, WORLD: WORLD, isWalkable: isWalkable };
