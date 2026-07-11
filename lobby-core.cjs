@@ -57,12 +57,14 @@ function segmentRect(a, b, width) {
     w: Math.abs(a.x - b.x) + width, h: Math.abs(a.y - b.y) + width };
 }
 const CORRIDORS = [];
+const DOORS = [];
 ROOM_LINKS.forEach(function (link, index) {
   const a = roomCenter(link[0]);
   const b = roomCenter(link[1]);
   const bend = { x: b.x, y: a.y };
   CORRIDORS.push(Object.assign({ id: 'corridor-' + index + '-a' }, segmentRect(a, bend, 820)));
   CORRIDORS.push(Object.assign({ id: 'corridor-' + index + '-b' }, segmentRect(bend, b, 820)));
+  DOORS.push({ id: 'door-' + index, x: bend.x - 330, y: bend.y - 330, w: 660, h: 660, rooms: link.slice() });
 });
 const SPAWNS = [
   [14300, 7600], [15000, 7600], [15700, 7600], [14300, 8400], [15000, 8400],
@@ -76,9 +78,25 @@ function pointInRect(x, y, rect, margin) {
   const pad = margin || 0;
   return x >= rect.x + pad && x <= rect.x + rect.w - pad && y >= rect.y + pad && y <= rect.y + rect.h - pad;
 }
-function isWalkable(x, y) {
-  return ROOMS.some(function (room) { return pointInRect(x, y, room, 90); }) ||
+function isDoorClosed(gameRoom, doorId) {
+  return Boolean(gameRoom && gameRoom.doorStates && gameRoom.doorStates[doorId] > gameRoom.gameTime);
+}
+function isWalkable(x, y, gameRoom) {
+  const onFloor = ROOMS.some(function (room) { return pointInRect(x, y, room, 90); }) ||
     CORRIDORS.some(function (corridor) { return pointInRect(x, y, corridor, 90); });
+  if (!onFloor) return false;
+  return !DOORS.some(function (door) { return isDoorClosed(gameRoom, door.id) && pointInRect(x, y, door, 40); });
+}
+function hasLineOfSight(viewer, target, gameRoom) {
+  const radius = viewer.role === 'IMPOSTOR' ? 3600 : 2700;
+  const dist = distance(viewer, target);
+  if (dist > radius) return false;
+  const steps = Math.max(1, Math.ceil(dist / 150));
+  for (let i = 1; i < steps; i += 1) {
+    const ratio = i / steps;
+    if (!isWalkable(viewer.x + (target.x - viewer.x) * ratio, viewer.y + (target.y - viewer.y) * ratio, gameRoom)) return false;
+  }
+  return true;
 }
 function roomAt(x, y) {
   const room = ROOMS.find(function (candidate) { return pointInRect(x, y, candidate, 0); });
@@ -130,7 +148,11 @@ function nickname(value) {
 
 function roomView(room, viewerId) {
   const viewer = room.players.get(viewerId);
-  const players = Array.from(room.players.values()).map(function (p) {
+  const allPlayers = Array.from(room.players.values());
+  const visiblePlayers = room.phase === 'PLAYING' && viewer
+    ? allPlayers.filter(function (p) { return p.id === viewer.id || hasLineOfSight(viewer, p, room); })
+    : allPlayers;
+  const players = visiblePlayers.map(function (p) {
     return {
       id: p.id, nickname: p.nickname, color: p.color, ready: p.ready,
       connected: p.connected, isBot: p.isBot, x: p.x, y: p.y,
@@ -151,12 +173,18 @@ function roomView(room, viewerId) {
     world: room.phase === 'PLAYING' ? WORLD : null,
     rooms: room.phase === 'PLAYING' ? ROOMS : [],
     corridors: room.phase === 'PLAYING' ? CORRIDORS : [],
+    doors: room.phase === 'PLAYING' ? DOORS.map(function (door) {
+      return { id: door.id, x: door.x, y: door.y, w: door.w, h: door.h,
+        closed: isDoorClosed(room, door.id), remaining: Math.max(0, (room.doorStates[door.id] || 0) - room.gameTime) };
+    }) : [],
     tasks: room.phase === 'PLAYING' ? TASKS.map(function (task) {
       return { id: task.id, label: task.label, x: task.x, y: task.y };
     }) : [],
     taskProgress: room.taskGoal ? room.tasksCompleted / room.taskGoal : 0,
     winner: room.winner,
-    message: room.message
+    message: room.message,
+    visionRadius: viewer && viewer.role === 'IMPOSTOR' ? 3600 : 2700,
+    sabotageCooldown: Math.max(0, (room.sabotageReadyAt || 0) - (room.gameTime || 0))
   };
 }
 
@@ -173,7 +201,8 @@ class LobbyStore {
       code: code, phase: 'LOBBY', revision: 1, hostId: player.id,
       players: new Map([[player.id, player]]),
       settings: { targetPlayers: 4, impostors: 1, autoFillBots: true },
-      tasksCompleted: 0, taskGoal: 0, winner: null, message: ''
+      tasksCompleted: 0, taskGoal: 0, winner: null, message: '', gameTime: 0,
+      doorStates: {}, sabotageReadyAt: 0
     };
     this.rooms.set(code, room);
     this.sessions.set(player.token, { roomCode: code, playerId: player.id });
@@ -240,6 +269,9 @@ class LobbyStore {
     room.taskGoal = 0;
     room.winner = null;
     room.message = '';
+    room.gameTime = 0;
+    room.doorStates = {};
+    room.sabotageReadyAt = 0;
     let spawn = 0;
     room.players.forEach(function (p) {
       p.role = impostorIds.has(p.id) ? 'IMPOSTOR' : 'CREW';
@@ -266,8 +298,8 @@ class LobbyStore {
     const length = Math.hypot(dx, dy) || 1;
     const nextX = clamp(found.player.x + (dx / length) * 180, 120, WORLD.width - 120);
     const nextY = clamp(found.player.y + (dy / length) * 180, 120, WORLD.height - 120);
-    if (isWalkable(nextX, found.player.y)) found.player.x = nextX;
-    if (isWalkable(found.player.x, nextY)) found.player.y = nextY;
+    if (isWalkable(nextX, found.player.y, found.room)) found.player.x = nextX;
+    if (isWalkable(found.player.x, nextY, found.room)) found.player.y = nextY;
     this._touch(found.room);
     return roomView(found.room, found.player.id);
   }
@@ -284,10 +316,43 @@ class LobbyStore {
     return roomView(found.room, player.id);
   }
 
+  useDoor(token, doorId) {
+    const found = this.byToken(token);
+    const door = DOORS.find(function (candidate) { return candidate.id === doorId; });
+    if (found.room.phase !== 'PLAYING' || !door) throw new Error('Door unavailable.');
+    const center = { x: door.x + door.w / 2, y: door.y + door.h / 2 };
+    if (distance(found.player, center) > 850) throw new Error('Move closer to the door.');
+    const closed = isDoorClosed(found.room, door.id);
+    if (found.player.role === 'IMPOSTOR') {
+      found.room.doorStates[door.id] = closed ? 0 : found.room.gameTime + 12;
+    } else {
+      if (!closed) throw new Error('Door is already open.');
+      found.room.doorStates[door.id] = 0;
+    }
+    this._touch(found.room);
+    return roomView(found.room, found.player.id);
+  }
+
+  sabotageDoors(token) {
+    const found = this.byToken(token);
+    if (found.room.phase !== 'PLAYING' || found.player.role !== 'IMPOSTOR') throw new Error('Impostor ability only.');
+    if (found.room.sabotageReadyAt > found.room.gameTime) throw new Error('Sabotage is cooling down.');
+    const nearest = DOORS.slice().sort(function (a, b) {
+      const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+      const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+      return distance(found.player, ac) - distance(found.player, bc);
+    }).slice(0, 5);
+    nearest.forEach(function (door) { found.room.doorStates[door.id] = found.room.gameTime + 15; });
+    found.room.sabotageReadyAt = found.room.gameTime + 35;
+    this._touch(found.room);
+    return roomView(found.room, found.player.id);
+  }
+
   tick(seconds) {
     const changed = [];
     this.rooms.forEach(function (room) {
       if (room.phase !== 'PLAYING') return;
+      room.gameTime += seconds;
       let dirty = false;
       room.players.forEach(function (bot) {
         if (!bot.isBot || bot.role !== 'CREW' || bot.tasksDone >= bot.taskGoal) return;
@@ -308,8 +373,8 @@ class LobbyStore {
           const step = Math.min(speed, dist);
           const nextX = bot.x + dx / (dist || 1) * step;
           const nextY = bot.y + dy / (dist || 1) * step;
-          if (isWalkable(nextX, bot.y)) bot.x = nextX;
-          if (isWalkable(bot.x, nextY)) bot.y = nextY;
+          if (isWalkable(nextX, bot.y, room)) bot.x = nextX;
+          if (isWalkable(bot.x, nextY, room)) bot.y = nextY;
         } else {
           bot.botWork += seconds;
           if (bot.botWork >= 3) this._finishTask(room, bot, task.id);
@@ -417,4 +482,5 @@ class LobbyStore {
   _touch(room) { room.revision += 1; }
 }
 
-module.exports = { LobbyStore: LobbyStore, roomView: roomView, TASKS: TASKS, ROOMS: ROOMS, CORRIDORS: CORRIDORS, WORLD: WORLD, isWalkable: isWalkable };
+module.exports = { LobbyStore: LobbyStore, roomView: roomView, TASKS: TASKS, ROOMS: ROOMS,
+  CORRIDORS: CORRIDORS, DOORS: DOORS, WORLD: WORLD, isWalkable: isWalkable, hasLineOfSight: hasLineOfSight };

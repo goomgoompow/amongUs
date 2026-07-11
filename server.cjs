@@ -126,6 +126,16 @@ const server = http.createServer(async function (req, res) {
       publishForToken(token);
       return sendJson(res, 200, { room: result });
     }
+    if (req.method === 'POST' && pathname === '/api/door') {
+      result = store.useDoor(token, body.doorId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/sabotage/doors') {
+      result = store.sabotageDoors(token);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
     if (req.method === 'POST' && pathname === '/api/leave') {
       const room = store.leave(token);
       if (room) publishRoom(room.code);

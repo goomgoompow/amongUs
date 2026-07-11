@@ -31,15 +31,34 @@ assert.deepStrictEqual({ x: hostState.x, y: hostState.y }, beforeWallMove, 'Serv
 
 const roles = [store.viewForToken(host.token).selfRole, store.viewForToken(guest.token).selfRole];
 assert.strictEqual(roles.filter(function (role) { return role === 'IMPOSTOR'; }).length, 1, 'Impostor is a human');
+const impostorToken = roles[0] === 'IMPOSTOR' ? host.token : guest.token;
+const crewToken = roles[0] === 'CREW' ? host.token : guest.token;
+const testDoor = gameCore.DOORS[0];
+const doorCenter = { x: testDoor.x + testDoor.w / 2, y: testDoor.y + testDoor.h / 2 };
+Object.assign(store.byToken(impostorToken).player, doorCenter);
+store.useDoor(impostorToken, testDoor.id);
+assert.strictEqual(store.viewForToken(impostorToken).doors.find(function (d) { return d.id === testDoor.id; }).closed, true);
+Object.assign(store.byToken(crewToken).player, doorCenter);
+store.useDoor(crewToken, testDoor.id);
+assert.strictEqual(store.viewForToken(crewToken).doors.find(function (d) { return d.id === testDoor.id; }).closed, false, 'Crew can open a locked nearby door');
+store.sabotageDoors(impostorToken);
+assert.strictEqual(store.viewForToken(impostorToken).doors.filter(function (d) { return d.closed; }).length, 5);
+assert(store.viewForToken(impostorToken).sabotageCooldown > 0);
+for (let i = 0; i < 160; i += 1) store.tick(0.1);
+assert.strictEqual(store.viewForToken(impostorToken).doors.some(function (d) { return d.closed; }), false, 'Sabotaged doors reopen automatically');
+
+Object.assign(store.byToken(crewToken).player, { x: 15000, y: 8000 });
+Object.assign(store.byToken(impostorToken).player, { x: 2800, y: 2100 });
+assert.strictEqual(store.viewForToken(crewToken).players.some(function (p) { return p.id === store.byToken(impostorToken).player.id; }), false, 'Distant players are not sent outside line of sight');
 
 for (let i = 0; i < 1500 && store.viewForToken(host.token).phase === 'PLAYING'; i += 1) {
   store.tick(0.1);
 }
 const afterBots = store.viewForToken(host.token);
-assert.strictEqual(afterBots.players.filter(function (p) { return p.isBot; }).every(function (p) { return p.tasksDone === 2; }), true);
+const rawBots = Array.from(store.byToken(host.token).room.players.values()).filter(function (p) { return p.isBot; });
+assert.strictEqual(rawBots.every(function (p) { return p.tasksDone === 2; }), true);
 assert(afterBots.taskProgress >= 0.5, 'Computer tasks contribute to shared progress');
 
-const crewToken = roles[0] === 'CREW' ? host.token : guest.token;
 const crewView = store.viewForToken(crewToken);
 for (const task of crewView.tasks.slice(0, 2)) {
   const found = store.byToken(crewToken);

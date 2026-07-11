@@ -150,8 +150,14 @@ select {
 .world-room::after { width: 25%; height: 30%; right: 8%; bottom: 10%; }
 .camera-vignette {
   position: absolute; inset: 0; z-index: 6; pointer-events: none;
-  background: radial-gradient(circle at center, transparent 0 38%, rgba(2,6,11,.34) 72%, rgba(1,3,7,.78) 100%);
+  background: radial-gradient(circle var(--vision-size, 900px) at center, transparent 0 42%, rgba(2,6,11,.72) 51%, rgba(1,3,7,.97) 62%);
 }
+.world-door {
+  position: absolute; z-index: 5; display: grid; place-items: center; color: #ffb2ad; font-weight: 900;
+  border: 3px solid rgba(155,190,210,.35); transition: background .2s, opacity .2s;
+}
+.world-door.open { opacity: .2; background: repeating-linear-gradient(90deg, #64e4d2 0 8px, transparent 8px 18px); }
+.world-door.closed { opacity: 1; background: repeating-linear-gradient(90deg, #6d2024 0 18px, #b54343 18px 30px); box-shadow: 0 0 28px rgba(255,72,72,.42); }
 .coordinates {
   position: absolute; left: 14px; bottom: 12px; z-index: 8; display: flex; flex-direction: column;
   padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(3,9,17,.78);
@@ -181,6 +187,8 @@ select {
 .game-controls { display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center; padding: 14px 18px; background: rgba(7,14,25,.94); border: 1px solid var(--line); border-radius: 0 0 16px 16px; }
 .game-controls span { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
 .task-button { width: auto; min-width: 220px; }
+.action-buttons { display: flex; gap: 9px; justify-content: flex-end; }
+.danger { background: #b43d43; color: white; border-color: #e36b70; }
 .result { position: absolute; inset: 0; z-index: 10; display: grid; place-content: center; text-align: center; background: rgba(2,6,11,.9); border-radius: 16px; }
 .result h2 { font-size: clamp(42px, 8vw, 86px); color: var(--cyan); }
 
@@ -190,4 +198,6 @@ select {
   .map { min-height: 480px; }
   .game-controls { grid-template-columns: 1fr; }
   .task-button { width: 100%; }
+  .action-buttons { display: grid; grid-template-columns: 1fr 1fr; }
+  .task-button { grid-column: 1 / -1; }
 }

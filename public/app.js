@@ -134,6 +134,20 @@ function renderGame(room) {
     node.textContent = worldRoom.label;
     $('#rooms-layer').appendChild(node);
   });
+  $('#doors-layer').innerHTML = '';
+  room.doors.forEach(function (door) {
+    const centerX = door.x + door.w / 2;
+    const centerY = door.y + door.h / 2;
+    if (!visible(centerX, centerY, 500)) return;
+    const node = document.createElement('div');
+    node.className = 'world-door ' + (door.closed ? 'closed' : 'open');
+    node.style.left = ((door.x - left) * scale) + 'px';
+    node.style.top = ((door.y - top) * scale) + 'px';
+    node.style.width = (door.w * scale) + 'px';
+    node.style.height = (door.h * scale) + 'px';
+    node.textContent = door.closed ? Math.ceil(door.remaining) : '';
+    $('#doors-layer').appendChild(node);
+  });
   $('#players-layer').innerHTML = '';
   room.players.forEach(function (player) {
     if (!visible(player.x, player.y, 300)) return;
@@ -156,11 +170,29 @@ function renderGame(room) {
     $('#tasks-layer').appendChild(node);
   });
   updateTaskButton(room, me);
+  updateDoorButtons(room, me);
+  $('#map').style.setProperty('--vision-size', Math.max(500, room.visionRadius * scale * 2) + 'px');
   if (room.phase === 'ENDED') {
     $('#result').classList.remove('hidden');
     $('#result-title').textContent = room.winner + ' VICTORY';
     $('#result-message').textContent = room.message;
   }
+}
+
+function updateDoorButtons(room, me) {
+  let nearest = null;
+  let nearestDistance = Infinity;
+  room.doors.forEach(function (door) {
+    const d = Math.hypot(me.x - (door.x + door.w / 2), me.y - (door.y + door.h / 2));
+    if (d < nearestDistance) { nearestDistance = d; nearest = door; }
+  });
+  const canUse = nearest && nearestDistance <= 850 && (room.selfRole === 'IMPOSTOR' || nearest.closed);
+  $('#use-door').disabled = !canUse || room.phase !== 'PLAYING';
+  $('#use-door').dataset.doorId = nearest ? nearest.id : '';
+  $('#use-door').textContent = nearest && nearest.closed ? 'OPEN DOOR' : 'LOCK DOOR';
+  $('#sabotage').classList.toggle('hidden', room.selfRole !== 'IMPOSTOR');
+  $('#sabotage').disabled = room.selfRole !== 'IMPOSTOR' || room.sabotageCooldown > 0 || room.phase !== 'PLAYING';
+  $('#sabotage').textContent = room.sabotageCooldown > 0 ? 'LOCKDOWN ' + Math.ceil(room.sabotageCooldown) : 'LOCKDOWN';
 }
 
 function updateTaskButton(room, me) {
@@ -232,6 +264,14 @@ $('#room-code').addEventListener('input', function (event) {
 });
 $('#do-task').addEventListener('click', async function () {
   try { await api('/api/task', { taskId: $('#do-task').dataset.taskId }, state.token); }
+  catch (e) { errorAt('#game-error', e.message); }
+});
+$('#use-door').addEventListener('click', async function () {
+  try { await api('/api/door', { doorId: $('#use-door').dataset.doorId }, state.token); }
+  catch (e) { errorAt('#game-error', e.message); }
+});
+$('#sabotage').addEventListener('click', async function () {
+  try { await api('/api/sabotage/doors', {}, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
 });
 

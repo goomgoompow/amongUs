@@ -67,6 +67,7 @@
       <div id="map" class="map" tabindex="0" aria-label="Game map">
         <div id="corridors-layer"></div>
         <div id="rooms-layer"></div>
+        <div id="doors-layer"></div>
         <div id="tasks-layer"></div>
         <div id="players-layer"></div>
         <div class="camera-vignette"></div>
@@ -75,7 +76,11 @@
       </div>
       <footer class="game-controls">
         <div><strong id="personal-tasks">0 / 0 TASKS</strong><span>Move with WASD or arrow keys</span></div>
-        <button id="do-task" class="primary task-button" disabled>USE / COMPLETE TASK</button>
+        <div class="action-buttons">
+          <button id="use-door" disabled>OPEN DOOR</button>
+          <button id="sabotage" class="danger hidden" disabled>LOCKDOWN</button>
+          <button id="do-task" class="primary task-button" disabled>USE / COMPLETE TASK</button>
+        </div>
       </footer>
       <div id="result" class="result hidden"><h2 id="result-title"></h2><p id="result-message"></p></div>
       <p id="game-error" class="error"></p>
