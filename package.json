@@ -1,0 +1,14 @@
+{
+  "name": "starlight-deception",
+  "version": "0.1.0",
+  "private": true,
+  "description": "브라우저로 즐기는 실시간 소셜 디덕션 게임의 첫 번째 대기실 구현",
+  "scripts": {
+    "start": "node server.cjs",
+    "dev": "node server.cjs",
+    "test": "node tests/lobby.test.cjs"
+  },
+  "engines": {
+    "node": ">=10"
+  }
+}
