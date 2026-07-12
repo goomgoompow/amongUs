@@ -28,6 +28,13 @@ hostState.y = 6200;
 const beforeWallMove = { x: hostState.x, y: hostState.y };
 store.move(host.token, { dx: -1, dy: -1 });
 assert.deepStrictEqual({ x: hostState.x, y: hostState.y }, beforeWallMove, 'Server rejects movement through a wall');
+Object.assign(hostState, { x: 15000, y: 8000, facing: 'down' });
+store.move(host.token, { dx: 1, dy: 0 });
+assert.strictEqual(hostState.x, 15125, 'Human movement uses the reduced speed');
+assert.strictEqual(hostState.facing, 'right', 'Movement updates character facing');
+assert.strictEqual(store.viewForToken(host.token).players.find(function (p) { return p.id === host.playerId; }).moving, true);
+store.tick(0.3);
+assert.strictEqual(store.viewForToken(host.token).players.find(function (p) { return p.id === host.playerId; }).moving, false, 'Walk animation stops after movement input ends');
 
 const roles = [store.viewForToken(host.token).selfRole, store.viewForToken(guest.token).selfRole];
 assert.strictEqual(roles.filter(function (role) { return role === 'IMPOSTOR'; }).length, 1, 'Impostor is a human');
@@ -69,6 +76,13 @@ for (const task of crewView.tasks.slice(0, 2)) {
 }
 assert.strictEqual(store.viewForToken(crewToken).phase, 'ENDED');
 assert.strictEqual(store.viewForToken(crewToken).winner, 'CREW');
+const rematchLobby = store.rematch(host.token);
+assert.strictEqual(rematchLobby.phase, 'LOBBY');
+assert.strictEqual(rematchLobby.players.length, 2, 'Computer players are removed for the rematch lobby');
+assert.strictEqual(rematchLobby.players.every(function (p) { return p.alive; }), true);
+assert.strictEqual(store.byToken(host.token).room.players.values().toArray().every(function (p) { return p.role === null; }), true);
+assert.strictEqual(rematchLobby.settings.targetPlayers, 4, 'Room settings survive a rematch');
+assert.throws(function () { store.rematch(guest.token); }, /Only the host|not ended/);
 
 const combatStore = new LobbyStore();
 const loneImpostor = combatStore.create({ nickname: 'Hunter', color: 'coral' });
@@ -89,4 +103,4 @@ combatStore.eliminate(loneImpostor.token, victims[1].id);
 assert.strictEqual(combatStore.viewForToken(loneImpostor.token).phase, 'ENDED');
 assert.strictEqual(combatStore.viewForToken(loneImpostor.token).winner, 'IMPOSTOR');
 
-console.log('Lobby, roles, doors, combat, bots and victory tests passed.');
+console.log('Lobby, rematch, roles, doors, combat, bots and victory tests passed.');

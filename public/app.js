@@ -48,6 +48,7 @@ function render(room) {
 
 function renderLobby(room) {
   show('lobby');
+  sessionStorage.removeItem('role-seen-' + room.code);
   const me = room.players.find(function (p) { return p.id === state.playerId; });
   const isHost = room.hostId === state.playerId;
   $('#display-code').textContent = room.code;
@@ -162,9 +163,10 @@ function renderGame(room) {
   room.players.forEach(function (player) {
     if (!player.alive || !visible(player.x, player.y, 300)) return;
     const actor = document.createElement('div');
-    actor.className = 'actor ' + player.color + (player.isBot ? ' bot' : '');
+    actor.className = 'actor facing-' + (player.facing || 'down') + ' ' + player.color +
+      (player.isBot ? ' bot' : '') + (player.moving ? ' moving' : '');
     place(actor, player.x, player.y);
-    actor.innerHTML = '<i></i><span></span>';
+    actor.innerHTML = '<b class="oxygen-tank"></b><i class="suit-body"></i><em class="suit-legs"><u></u><u></u></em><span></span>';
     actor.querySelector('span').textContent = player.nickname + (player.isBot ? ' [CPU]' : '');
     $('#players-layer').appendChild(actor);
   });
@@ -188,6 +190,11 @@ function renderGame(room) {
     $('#result').classList.remove('hidden');
     $('#result-title').textContent = room.winner + ' VICTORY';
     $('#result-message').textContent = room.message;
+    const isHost = room.hostId === state.playerId;
+    $('#rematch').classList.toggle('hidden', !isHost);
+    $('#rematch-status').textContent = isHost ? 'Return everyone to the lobby for another round.' : 'Waiting for the host to start another round.';
+  } else {
+    $('#result').classList.add('hidden');
   }
 }
 
@@ -321,6 +328,18 @@ $('#attack').addEventListener('click', async function () {
 $('#role-reveal-close').addEventListener('click', function () {
   if (state.room && state.room.selfRole) sessionStorage.setItem('role-seen-' + state.room.code, state.room.selfRole);
   $('#role-reveal').classList.add('hidden');
+});
+$('#rematch').addEventListener('click', async function () {
+  try {
+    sessionStorage.removeItem('role-seen-' + state.room.code);
+    await api('/api/rematch', {}, state.token);
+  } catch (e) { errorAt('#game-error', e.message); }
+});
+$('#result-leave').addEventListener('click', async function () {
+  try { await api('/api/leave', {}, state.token); } catch (e) {}
+  if (state.stream) state.stream.close();
+  sessionStorage.clear();
+  location.reload();
 });
 
 window.addEventListener('keydown', function (event) {

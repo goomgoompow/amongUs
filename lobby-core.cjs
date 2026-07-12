@@ -157,6 +157,7 @@ function roomView(room, viewerId) {
       id: p.id, nickname: p.nickname, color: p.color, ready: p.ready,
       connected: p.connected, isBot: p.isBot, x: p.x, y: p.y,
       tasksDone: p.tasksDone, taskGoal: p.taskGoal, alive: p.alive,
+      facing: p.facing, moving: (p.movingUntil || 0) > (room.gameTime || 0),
       isImpostorAlly: Boolean(viewer && viewer.role === 'IMPOSTOR' && p.role === 'IMPOSTOR')
     };
   });
@@ -291,6 +292,8 @@ class LobbyStore {
       p.botWork = 0;
       p.alive = true;
       p.killReadyAt = p.role === 'IMPOSTOR' ? 8 : 0;
+      p.facing = 'down';
+      p.movingUntil = 0;
       room.taskGoal += p.taskGoal;
       spawn += 1;
     });
@@ -306,8 +309,11 @@ class LobbyStore {
     const dx = clamp(Number(input.dx) || 0, -1, 1);
     const dy = clamp(Number(input.dy) || 0, -1, 1);
     const length = Math.hypot(dx, dy) || 1;
-    const nextX = clamp(found.player.x + (dx / length) * 180, 120, WORLD.width - 120);
-    const nextY = clamp(found.player.y + (dy / length) * 180, 120, WORLD.height - 120);
+    const nextX = clamp(found.player.x + (dx / length) * 125, 120, WORLD.width - 120);
+    const nextY = clamp(found.player.y + (dy / length) * 125, 120, WORLD.height - 120);
+    if (Math.abs(dx) >= Math.abs(dy) && dx) found.player.facing = dx < 0 ? 'left' : 'right';
+    else if (dy) found.player.facing = dy < 0 ? 'up' : 'down';
+    if (dx || dy) found.player.movingUntil = found.room.gameTime + 0.24;
     if (isWalkable(nextX, found.player.y, found.room)) found.player.x = nextX;
     if (isWalkable(found.player.x, nextY, found.room)) found.player.y = nextY;
     this._touch(found.room);
@@ -360,6 +366,39 @@ class LobbyStore {
     return roomView(found.room, found.player.id);
   }
 
+  rematch(token) {
+    const found = this.byToken(token);
+    const room = found.room;
+    if (found.player.id !== room.hostId) throw new Error('Only the host can start a rematch.');
+    if (room.phase !== 'ENDED') throw new Error('The current game has not ended.');
+    this._removeBots(room);
+    room.phase = 'LOBBY';
+    room.tasksCompleted = 0;
+    room.taskGoal = 0;
+    room.winner = null;
+    room.message = '';
+    room.gameTime = 0;
+    room.doorStates = {};
+    room.sabotageReadyAt = 0;
+    room.bodies = [];
+    room.players.forEach(function (player) {
+      player.role = null;
+      player.alive = true;
+      player.ready = false;
+      player.tasksDone = 0;
+      player.taskGoal = 0;
+      player.completedTaskIds = new Set();
+      player.killReadyAt = 0;
+      player.botTarget = null;
+      player.botPath = [];
+      player.botWork = 0;
+      player.facing = 'down';
+      player.movingUntil = 0;
+    });
+    this._touch(room);
+    return roomView(room, found.player.id);
+  }
+
   eliminate(token, targetId) {
     const found = this.byToken(token);
     const room = found.room;
@@ -402,8 +441,11 @@ class LobbyStore {
         const dy = destination.y - bot.y;
         const dist = Math.hypot(dx, dy);
         if (distance(bot, task) > 180 || (bot.botPath && bot.botPath.length)) {
-          const speed = 760 * seconds;
+          const speed = 590 * seconds;
           const step = Math.min(speed, dist);
+          if (Math.abs(dx) >= Math.abs(dy) && dx) bot.facing = dx < 0 ? 'left' : 'right';
+          else if (dy) bot.facing = dy < 0 ? 'up' : 'down';
+          bot.movingUntil = room.gameTime + 0.24;
           const nextX = bot.x + dx / (dist || 1) * step;
           const nextY = bot.y + dy / (dist || 1) * step;
           if (isWalkable(nextX, bot.y, room)) bot.x = nextX;
@@ -487,7 +529,7 @@ class LobbyStore {
     return {
       id: id(8), token: id(24), nickname: nickname(input.nickname),
       color: COLORS.indexOf(input.color) >= 0 ? input.color : COLORS[0],
-      ready: false, connected: true, isBot: false, role: null, alive: true, killReadyAt: 0,
+      ready: false, connected: true, isBot: false, role: null, alive: true, killReadyAt: 0, facing: 'down', movingUntil: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 0, completedTaskIds: new Set()
     };
   }
@@ -500,7 +542,7 @@ class LobbyStore {
     }) || COLORS[room.players.size % COLORS.length];
     const bot = {
       id: 'bot-' + id(5), token: null, nickname: name, color: color,
-      ready: true, connected: true, isBot: true, role: 'CREW', alive: true, killReadyAt: 0,
+      ready: true, connected: true, isBot: true, role: 'CREW', alive: true, killReadyAt: 0, facing: 'down', movingUntil: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 2, completedTaskIds: new Set(),
       botTarget: null, botWork: 0
     };

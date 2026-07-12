@@ -141,6 +141,11 @@ const server = http.createServer(async function (req, res) {
       publishForToken(token);
       return sendJson(res, 200, { room: result });
     }
+    if (req.method === 'POST' && pathname === '/api/rematch') {
+      result = store.rematch(token);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
     if (req.method === 'POST' && pathname === '/api/leave') {
       const room = store.leave(token);
       if (room) publishRoom(room.code);
