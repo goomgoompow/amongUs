@@ -61,7 +61,7 @@
     <section id="game" class="game-shell hidden">
       <header class="game-hud">
         <div><span class="eyebrow">MISSION IN PROGRESS</span><strong id="role">ROLE</strong></div>
-        <div class="progress-wrap"><span>TASKS</span><div class="progress"><i id="task-progress"></i></div></div>
+        <div class="progress-wrap"><span>TASKS</span><div class="progress"><i id="task-progress"></i></div><strong id="task-count">0 / 0</strong></div>
         <div><span>ROOM</span><strong id="game-code">------</strong></div>
       </header>
       <div id="map" class="map" tabindex="0" aria-label="Game map">
@@ -69,18 +69,24 @@
         <div id="rooms-layer"></div>
         <div id="doors-layer"></div>
         <div id="bodies-layer"></div>
+        <div id="vents-layer"></div>
         <div id="emergency-console" class="emergency-console hidden"><b>!</b><span>EMERGENCY</span></div>
         <div id="tasks-layer"></div>
         <div id="players-layer"></div>
         <div class="camera-vignette"></div>
         <div class="coordinates"><span id="position">X 0 / Y 0</span><span>WORLD 30,000 x 20,000</span></div>
-        <div id="minimap" class="minimap"><i id="minimap-player"></i></div>
+        <div id="minimap" class="minimap">
+          <div id="minimap-terrain"></div>
+          <i id="minimap-view" class="minimap-view"></i>
+          <i id="minimap-player" class="minimap-player"></i>
+        </div>
       </div>
       <footer class="game-controls">
         <div><strong id="personal-tasks">0 / 0 TASKS</strong><span>Move with WASD or arrow keys</span></div>
         <div class="action-buttons">
           <button id="use-door" disabled>OPEN DOOR</button>
           <button id="sabotage" class="danger hidden" disabled>LOCKDOWN</button>
+          <button id="vent" class="vent-button hidden" disabled>VENT</button>
           <button id="attack" class="danger hidden" disabled>ELIMINATE</button>
           <button id="report" class="report-button" disabled>REPORT</button>
           <button id="emergency" disabled>EMERGENCY</button>
@@ -106,6 +112,13 @@
         <div id="meeting-roster" class="meeting-roster"></div>
         <button id="vote-skip">SKIP VOTE</button>
         <p class="meeting-note">A result requires more than half of living players to participate.</p>
+      </div>
+      <div id="ejection" class="ejection hidden">
+        <div class="stars"></div>
+        <div id="ejection-character" class="ejection-character"><b></b><i></i><em><u></u><u></u></em></div>
+        <h2 id="ejection-title"></h2>
+        <p id="ejection-role"></p>
+        <span id="ejection-timer"></span>
       </div>
       <p id="game-error" class="error"></p>
     </section>

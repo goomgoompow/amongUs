@@ -67,6 +67,12 @@ const afterBots = store.viewForToken(host.token);
 const rawBots = Array.from(store.byToken(host.token).room.players.values()).filter(function (p) { return p.isBot; });
 assert.strictEqual(rawBots.every(function (p) { return !p.alive || p.tasksDone === 2; }), true);
 assert(afterBots.taskProgress >= 0.5, 'Computer tasks contribute to shared progress');
+const patrolPositions = rawBots.map(function (bot) { return { id: bot.id, x: bot.x, y: bot.y }; });
+for (let i = 0; i < 50; i += 1) store.tick(0.1);
+assert.strictEqual(rawBots.some(function (bot) {
+  const before = patrolPositions.find(function (position) { return position.id === bot.id; });
+  return Math.hypot(bot.x - before.x, bot.y - before.y) > 50;
+}), true, 'Bots patrol after completing their tasks');
 
 const crewView = store.viewForToken(crewToken);
 for (const task of crewView.tasks.slice(0, 2)) {
@@ -121,7 +127,12 @@ assert.strictEqual(reportRoom.bodies.length, 0, 'Reported body is removed from t
 const frozenX = reporter.x;
 reportStore.move(reporterSession.token, { dx: 1, dy: 0 });
 assert.strictEqual(reporter.x, frozenX, 'Movement is frozen during meetings');
-for (let i = 0; i < 451; i += 1) reportStore.tick(0.1);
+Object.keys(reportRoom.meeting.botPlans).forEach(function (botId) {
+  reportRoom.meeting.botPlans[botId].decided = true;
+  reportRoom.meeting.botPlans[botId].participate = false;
+});
+reportStore.voteMeeting(reporterSession.token, null);
+for (let i = 0; i < 51; i += 1) reportStore.tick(0.1);
 assert.strictEqual(reportStore.viewForToken(reporterSession.token).phase, 'PLAYING');
 
 const emergencyStore = new LobbyStore();
@@ -174,12 +185,37 @@ ejectStore.voteMeeting(ejectSession.token, ejectBots[0].id);
 assert.strictEqual(ejectRoom.meeting.result.status, 'EJECTED');
 assert.strictEqual(ejectRoom.meeting.result.ejectedId, ejectBots[0].id);
 assert.strictEqual(ejectBots[0].alive, false);
+assert.strictEqual(ejectRoom.meeting.stage, 'RESULT');
+for (let i = 0; i < 51; i += 1) ejectStore.tick(0.1);
+assert.strictEqual(ejectRoom.meeting.stage, 'EJECTION');
+for (let i = 0; i < 51; i += 1) ejectStore.tick(0.1);
+assert.strictEqual(ejectStore.viewForToken(ejectSession.token).phase, 'PLAYING');
 
 const largeStore = new LobbyStore();
 const largeHost = largeStore.create({ nickname: 'BigHost', color: 'violet' });
 const largeSettings = largeStore.updateSettings(largeHost.token, { targetPlayers: 20, impostors: 4, autoFillBots: true });
 assert.strictEqual(largeSettings.settings.targetPlayers, 20);
 assert.strictEqual(largeSettings.settings.impostors, 4);
+
+const ventStore = new LobbyStore();
+const ventHost = ventStore.create({ nickname: 'VentHost', color: 'maroon' });
+const ventGuest = ventStore.join({ code: ventHost.room.code, nickname: 'VentGuest', color: 'cyan' });
+ventStore.setReady(ventGuest.token, true);
+ventStore.start(ventHost.token);
+const ventTokens = [ventHost.token, ventGuest.token];
+const ventImpostorToken = ventTokens.find(function (token) { return ventStore.byToken(token).player.role === 'IMPOSTOR'; });
+const ventCrewToken = ventTokens.find(function (token) { return ventStore.byToken(token).player.role === 'CREW'; });
+const sourceVent = gameCore.VENTS[0];
+const destinationVent = gameCore.VENTS.find(function (vent) { return vent.id === sourceVent.links[0]; });
+Object.assign(ventStore.byToken(ventImpostorToken).player, { x: sourceVent.x, y: sourceVent.y });
+ventStore.useVent(ventImpostorToken, sourceVent.id, destinationVent.id);
+assert.strictEqual(ventStore.byToken(ventImpostorToken).player.x, destinationVent.x);
+assert.strictEqual(ventStore.byToken(ventImpostorToken).player.y, destinationVent.y);
+assert(ventStore.viewForToken(ventImpostorToken).ventCooldown > 0);
+assert.strictEqual(ventStore.viewForToken(ventImpostorToken).vents.length, gameCore.VENTS.length);
+Object.assign(ventStore.byToken(ventCrewToken).player, { x: sourceVent.x, y: sourceVent.y });
+assert.throws(function () { ventStore.useVent(ventCrewToken, sourceVent.id, destinationVent.id); }, /impostor ability/);
+assert.strictEqual(ventStore.viewForToken(ventCrewToken).vents.length, 0, 'Crew clients do not receive vent locations');
 
 const missionStore = new LobbyStore();
 const missionHost = missionStore.create({ nickname: 'MissionHost', color: 'teal' });
@@ -203,4 +239,4 @@ missionStore.tick(0.1);
 assert.strictEqual(missionStore.viewForToken(missionCrewToken).phase, 'PLAYING');
 assert.strictEqual(missionStore.viewForToken(missionCrewToken).selfCompletedTaskIds.includes(firstMission.id), true, 'Completed tasks remain identifiable after a meeting');
 
-console.log('Lobby, voting, meetings, 20-player settings, missions, reports and combat tests passed.');
+console.log('Lobby, vents, smarter bots, ejection, voting, missions and combat tests passed.');

@@ -5,7 +5,8 @@ const COLORS = ['coral', 'amber', 'mint', 'sky', 'violet', 'rose', 'lime', 'navy
 const state = {
   token: sessionStorage.getItem('station-token'),
   playerId: sessionStorage.getItem('station-player'),
-  room: null, color: 'coral', stream: null, keys: new Set(), moving: false
+  room: null, color: 'coral', stream: null, keys: new Set(), moving: false,
+  meetingId: null, pendingVote: undefined
 };
 const $ = function (selector) { return document.querySelector(selector); };
 const sections = { home: $('#home'), lobby: $('#lobby'), game: $('#game') };
@@ -52,9 +53,24 @@ function render(room) {
 }
 
 function renderMeeting(room) {
+  if (state.meetingId !== room.meeting.id) {
+    state.meetingId = room.meeting.id;
+    state.pendingVote = undefined;
+  }
   show('game');
   $('#result').classList.add('hidden');
   $('#role-reveal').classList.add('hidden');
+  if (room.meeting.stage === 'EJECTION') {
+    const ejected = room.players.find(function (player) { return room.meeting.result && player.id === room.meeting.result.ejectedId; });
+    $('#meeting').classList.add('hidden');
+    $('#ejection').classList.remove('hidden');
+    $('#ejection-character').className = 'ejection-character ' + (ejected ? ejected.color : 'gray');
+    $('#ejection-title').textContent = room.meeting.result.ejectedName + ' WAS EJECTED';
+    $('#ejection-role').textContent = room.meeting.result.wasImpostor ? 'THEY WERE AN IMPOSTOR' : 'THEY WERE CREW';
+    $('#ejection-timer').textContent = Math.ceil(room.meeting.resultRemaining);
+    return;
+  }
+  $('#ejection').classList.add('hidden');
   $('#meeting').classList.remove('hidden');
   const result = room.meeting.result;
   $('#meeting-title').textContent = room.meeting.stage === 'RESULT' ? 'VOTE RESULT'
@@ -76,6 +92,9 @@ function renderMeeting(room) {
   if (room.meeting.hasVoted) {
     const selected = room.meeting.ownVote ? room.players.find(function (player) { return player.id === room.meeting.ownVote; }) : null;
     voteLabel = 'VOTE SUBMITTED: ' + (selected ? selected.nickname : 'SKIP');
+  } else if (state.pendingVote !== undefined) {
+    const pending = state.pendingVote ? room.players.find(function (player) { return player.id === state.pendingVote; }) : null;
+    voteLabel = 'SUBMITTING VOTE: ' + (pending ? pending.nickname : 'SKIP');
   } else if (room.meeting.stage === 'VOTING' && room.selfAlive) {
     voteLabel = 'SELECT A PLAYER OR SKIP';
   }
@@ -85,21 +104,31 @@ function renderMeeting(room) {
   room.players.forEach(function (player) {
     const item = document.createElement('button');
     item.type = 'button';
+    item.dataset.voteTarget = player.id;
     item.className = 'meeting-player ' + (!player.alive ? 'eliminated' : '');
+    const selectedVote = room.meeting.stage === 'RESULT' && result ? result.ejectedId
+      : (room.meeting.hasVoted ? room.meeting.ownVote : state.pendingVote);
+    if (selectedVote === player.id) item.classList.add('selected-vote');
     item.innerHTML = '<i class="' + player.color + '"></i><span></span><b></b>';
     item.querySelector('span').textContent = player.nickname;
-    item.querySelector('b').textContent = player.alive ? (player.isBot ? 'CPU' : 'VOTE') : 'ELIMINATED';
-    item.disabled = room.meeting.stage !== 'VOTING' || room.meeting.hasVoted || !room.selfAlive || !player.alive;
-    item.addEventListener('click', function () { submitVote(player.id); });
+    const voteCount = result && result.tally ? (result.tally[player.id] || 0) : null;
+    item.querySelector('b').textContent = voteCount !== null ? voteCount + ' VOTES'
+      : (player.alive ? (player.isBot ? 'CPU' : 'VOTE') : 'ELIMINATED');
+    item.disabled = room.meeting.stage !== 'VOTING' || room.meeting.hasVoted || state.pendingVote !== undefined || !room.selfAlive || !player.alive;
     $('#meeting-roster').appendChild(item);
   });
   $('#vote-skip').classList.toggle('hidden', room.meeting.stage !== 'VOTING');
-  $('#vote-skip').disabled = room.meeting.hasVoted || !room.selfAlive;
+  $('#vote-skip').disabled = room.meeting.hasVoted || state.pendingVote !== undefined || !room.selfAlive;
+  $('#vote-skip').classList.toggle('selected-vote', (room.meeting.hasVoted ? room.meeting.ownVote : state.pendingVote) === null);
+  if (result && result.tally && result.tally.SKIP) $('#meeting-participation').textContent += ' / SKIP ' + result.tally.SKIP;
 }
 
 async function submitVote(targetId) {
+  if (!state.room || !state.room.meeting || state.room.meeting.hasVoted || state.pendingVote !== undefined) return;
+  state.pendingVote = targetId;
+  renderMeeting(state.room);
   try { await api('/api/meeting/vote', { targetId: targetId }, state.token); }
-  catch (e) { errorAt('#game-error', e.message); }
+  catch (e) { state.pendingVote = undefined; errorAt('#game-error', e.message); renderMeeting(state.room); }
 }
 
 function renderLobby(room) {
@@ -143,6 +172,7 @@ function renderLobby(room) {
 function renderGame(room) {
   show('game');
   $('#meeting').classList.add('hidden');
+  $('#ejection').classList.add('hidden');
   const me = room.players.find(function (p) { return p.id === state.playerId; });
   const viewport = $('#map').getBoundingClientRect();
   const viewWidth = 3600;
@@ -163,10 +193,10 @@ function renderGame(room) {
   $('#role').className = room.selfRole === 'IMPOSTOR' ? 'impostor-role' : 'crew-role';
   $('#game-code').textContent = room.code;
   $('#task-progress').style.width = Math.round(room.taskProgress * 100) + '%';
+  $('#task-count').textContent = room.tasksCompleted + ' / ' + room.totalTasks;
   $('#personal-tasks').textContent = me ? me.tasksDone + ' / ' + me.taskGoal + ' TASKS' : '';
   $('#position').textContent = me ? 'X ' + Math.round(me.x) + ' / Y ' + Math.round(me.y) : '';
-  $('#minimap-player').style.left = (me ? me.x / room.world.width * 100 : 50) + '%';
-  $('#minimap-player').style.top = (me ? me.y / room.world.height * 100 : 50) + '%';
+  renderMinimap(room, me, left, top, viewWidth, viewHeight);
   if (room.emergencyStation) {
     $('#emergency-console').classList.remove('hidden');
     place($('#emergency-console'), room.emergencyStation.x, room.emergencyStation.y);
@@ -243,6 +273,15 @@ function renderGame(room) {
   Array.from($('#players-layer').children).forEach(function (actor) {
     if (!visiblePlayerIds.has(actor.dataset.playerId)) actor.remove();
   });
+  $('#vents-layer').innerHTML = '';
+  room.vents.forEach(function (vent) {
+    if (!visible(vent.x, vent.y, 350)) return;
+    const node = document.createElement('div');
+    node.className = 'vent-node';
+    place(node, vent.x, vent.y);
+    node.innerHTML = '<i></i><span>VENT</span>';
+    $('#vents-layer').appendChild(node);
+  });
   $('#tasks-layer').innerHTML = '';
   room.tasks.forEach(function (task) {
     if (!visible(task.x, task.y, 400)) return;
@@ -257,6 +296,7 @@ function renderGame(room) {
   updateTaskButton(room, me);
   updateDoorButtons(room, me);
   updateAttackButton(room, me);
+  updateVentButton(room, me);
   updateMeetingButtons(room, me);
   revealRole(room);
   $('#map').style.setProperty('--vision-size', Math.max(500, room.visionRadius * scale * 2) + 'px');
@@ -270,6 +310,59 @@ function renderGame(room) {
   } else {
     $('#result').classList.add('hidden');
   }
+}
+
+function renderMinimap(room, me, cameraLeft, cameraTop, viewWidth, viewHeight) {
+  const terrain = $('#minimap-terrain');
+  terrain.innerHTML = '';
+  function addRect(className, item) {
+    const node = document.createElement('i');
+    node.className = className;
+    node.style.left = (item.x / room.world.width * 100) + '%';
+    node.style.top = (item.y / room.world.height * 100) + '%';
+    node.style.width = (item.w / room.world.width * 100) + '%';
+    node.style.height = (item.h / room.world.height * 100) + '%';
+    terrain.appendChild(node);
+  }
+  room.corridors.forEach(function (corridor) { addRect('mini-corridor', corridor); });
+  room.rooms.forEach(function (worldRoom) { addRect('mini-room', worldRoom); });
+  room.doors.filter(function (door) { return door.closed; }).forEach(function (door) { addRect('mini-door', door); });
+  room.tasks.forEach(function (task) {
+    if (room.selfCompletedTaskIds.indexOf(task.id) >= 0) return;
+    const node = document.createElement('b');
+    node.className = 'mini-task';
+    node.style.left = (task.x / room.world.width * 100) + '%';
+    node.style.top = (task.y / room.world.height * 100) + '%';
+    terrain.appendChild(node);
+  });
+  room.vents.forEach(function (vent) {
+    const node = document.createElement('b');
+    node.className = 'mini-vent';
+    node.style.left = (vent.x / room.world.width * 100) + '%';
+    node.style.top = (vent.y / room.world.height * 100) + '%';
+    terrain.appendChild(node);
+  });
+  $('#minimap-player').style.left = (me ? me.x / room.world.width * 100 : 50) + '%';
+  $('#minimap-player').style.top = (me ? me.y / room.world.height * 100 : 50) + '%';
+  $('#minimap-view').style.left = (cameraLeft / room.world.width * 100) + '%';
+  $('#minimap-view').style.top = (cameraTop / room.world.height * 100) + '%';
+  $('#minimap-view').style.width = (viewWidth / room.world.width * 100) + '%';
+  $('#minimap-view').style.height = (viewHeight / room.world.height * 100) + '%';
+}
+
+function updateVentButton(room, me) {
+  let nearest = null;
+  let nearestDistance = Infinity;
+  room.vents.forEach(function (vent) {
+    const d = Math.hypot(me.x - vent.x, me.y - vent.y);
+    if (d < nearestDistance) { nearestDistance = d; nearest = vent; }
+  });
+  $('#vent').classList.toggle('hidden', room.selfRole !== 'IMPOSTOR');
+  $('#vent').disabled = room.selfRole !== 'IMPOSTOR' || !room.selfAlive || !nearest || nearestDistance > 520 || room.ventCooldown > 0;
+  $('#vent').dataset.ventId = nearest ? nearest.id : '';
+  $('#vent').dataset.destinationId = nearest ? nearest.destinationId : '';
+  $('#vent').textContent = room.ventCooldown > 0 ? 'VENT ' + Math.ceil(room.ventCooldown)
+    : (nearest && nearestDistance <= 520 ? 'VENT TO ' + nearest.destinationRoom : 'VENT');
 }
 
 function updateMeetingButtons(room, me) {
@@ -417,6 +510,10 @@ $('#sabotage').addEventListener('click', async function () {
   try { await api('/api/sabotage/doors', {}, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
 });
+$('#vent').addEventListener('click', async function () {
+  try { await api('/api/vent', { ventId: $('#vent').dataset.ventId, destinationId: $('#vent').dataset.destinationId }, state.token); }
+  catch (e) { errorAt('#game-error', e.message); }
+});
 $('#report').addEventListener('click', async function () {
   try { await api('/api/report', { bodyId: $('#report').dataset.bodyId }, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
@@ -425,7 +522,19 @@ $('#emergency').addEventListener('click', async function () {
   try { await api('/api/meeting/emergency', {}, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
 });
-$('#vote-skip').addEventListener('click', function () { submitVote(null); });
+$('#meeting-roster').addEventListener('pointerdown', function (event) {
+  const button = event.target.closest('[data-vote-target]');
+  if (!button || button.disabled) return;
+  event.preventDefault();
+  submitVote(button.dataset.voteTarget);
+});
+$('#meeting-roster').addEventListener('keydown', function (event) {
+  const button = event.target.closest('[data-vote-target]');
+  if (!button || button.disabled || (event.key !== 'Enter' && event.key !== ' ')) return;
+  event.preventDefault();
+  submitVote(button.dataset.voteTarget);
+});
+$('#vote-skip').addEventListener('pointerdown', function (event) { event.preventDefault(); submitVote(null); });
 $('#attack').addEventListener('click', async function () {
   try { await api('/api/eliminate', { targetId: $('#attack').dataset.targetId }, state.token); }
   catch (e) { errorAt('#game-error', e.message); }

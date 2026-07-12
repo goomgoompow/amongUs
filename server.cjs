@@ -136,6 +136,11 @@ const server = http.createServer(async function (req, res) {
       publishForToken(token);
       return sendJson(res, 200, { room: result });
     }
+    if (req.method === 'POST' && pathname === '/api/vent') {
+      result = store.useVent(token, body.ventId, body.destinationId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
     if (req.method === 'POST' && pathname === '/api/eliminate') {
       result = store.eliminate(token, body.targetId);
       publishForToken(token);
