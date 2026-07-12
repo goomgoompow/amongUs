@@ -1,6 +1,7 @@
 'use strict';
 
-const COLORS = ['coral', 'amber', 'mint', 'sky', 'violet', 'rose', 'lime', 'navy', 'white', 'black'];
+const COLORS = ['coral', 'amber', 'mint', 'sky', 'violet', 'rose', 'lime', 'navy', 'white', 'black',
+  'teal', 'orange', 'magenta', 'cyan', 'brown', 'gray', 'gold', 'lavender', 'olive', 'maroon'];
 const state = {
   token: sessionStorage.getItem('station-token'),
   playerId: sessionStorage.getItem('station-player'),
@@ -8,6 +9,9 @@ const state = {
 };
 const $ = function (selector) { return document.querySelector(selector); };
 const sections = { home: $('#home'), lobby: $('#lobby'), game: $('#game') };
+function normalizeRoomCode(value) {
+  return String(value || '').normalize('NFKC').toUpperCase().replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, '').slice(0, 6);
+}
 
 function show(name) {
   Object.keys(sections).forEach(function (key) { sections[key].classList.toggle('hidden', key !== name); });
@@ -43,7 +47,59 @@ function connectStream() {
 function render(room) {
   state.room = room;
   if (room.phase === 'LOBBY') renderLobby(room);
+  else if (room.phase === 'MEETING') renderMeeting(room);
   else renderGame(room);
+}
+
+function renderMeeting(room) {
+  show('game');
+  $('#result').classList.add('hidden');
+  $('#role-reveal').classList.add('hidden');
+  $('#meeting').classList.remove('hidden');
+  const result = room.meeting.result;
+  $('#meeting-title').textContent = room.meeting.stage === 'RESULT' ? 'VOTE RESULT'
+    : (room.meeting.type === 'BODY_REPORT' ? 'BODY REPORTED' : 'EMERGENCY MEETING');
+  let detail = room.meeting.type === 'BODY_REPORT'
+    ? room.meeting.callerName + ' reported ' + room.meeting.reportedName + '.'
+    : room.meeting.callerName + ' called everyone together.';
+  if (result) {
+    if (result.status === 'EJECTED') detail = result.ejectedName + ' was ejected. ' + (result.wasImpostor ? 'They were an impostor.' : 'They were crew.');
+    else if (result.status === 'INSUFFICIENT_PARTICIPATION') detail = 'Meeting canceled: not enough players voted.';
+    else if (result.status === 'TIE') detail = 'No one was ejected because the vote was tied.';
+    else if (result.status === 'SKIPPED') detail = 'The crew voted to skip.';
+    else detail = 'No one was ejected.';
+  }
+  $('#meeting-detail').textContent = detail;
+  $('#meeting-timer').textContent = Math.ceil(room.meeting.stage === 'RESULT' ? room.meeting.resultRemaining : room.meeting.votingRemaining);
+  $('#meeting-participation').textContent = room.meeting.participation + ' / ' + room.meeting.eligibleVoters + ' participated';
+  let voteLabel = '';
+  if (room.meeting.hasVoted) {
+    const selected = room.meeting.ownVote ? room.players.find(function (player) { return player.id === room.meeting.ownVote; }) : null;
+    voteLabel = 'VOTE SUBMITTED: ' + (selected ? selected.nickname : 'SKIP');
+  } else if (room.meeting.stage === 'VOTING' && room.selfAlive) {
+    voteLabel = 'SELECT A PLAYER OR SKIP';
+  }
+  $('#vote-status').textContent = voteLabel;
+  $('#vote-status').classList.toggle('submitted', room.meeting.hasVoted);
+  $('#meeting-roster').innerHTML = '';
+  room.players.forEach(function (player) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'meeting-player ' + (!player.alive ? 'eliminated' : '');
+    item.innerHTML = '<i class="' + player.color + '"></i><span></span><b></b>';
+    item.querySelector('span').textContent = player.nickname;
+    item.querySelector('b').textContent = player.alive ? (player.isBot ? 'CPU' : 'VOTE') : 'ELIMINATED';
+    item.disabled = room.meeting.stage !== 'VOTING' || room.meeting.hasVoted || !room.selfAlive || !player.alive;
+    item.addEventListener('click', function () { submitVote(player.id); });
+    $('#meeting-roster').appendChild(item);
+  });
+  $('#vote-skip').classList.toggle('hidden', room.meeting.stage !== 'VOTING');
+  $('#vote-skip').disabled = room.meeting.hasVoted || !room.selfAlive;
+}
+
+async function submitVote(targetId) {
+  try { await api('/api/meeting/vote', { targetId: targetId }, state.token); }
+  catch (e) { errorAt('#game-error', e.message); }
 }
 
 function renderLobby(room) {
@@ -52,11 +108,13 @@ function renderLobby(room) {
   const me = room.players.find(function (p) { return p.id === state.playerId; });
   const isHost = room.hostId === state.playerId;
   $('#display-code').textContent = room.code;
-  $('#player-count').textContent = room.players.length + ' / 10';
+  $('#player-count').textContent = room.players.length + ' / 20';
   $('#settings').classList.toggle('settings-locked', !isHost);
   $('#target-players').value = String(room.settings.targetPlayers);
   $('#impostors').value = String(room.settings.impostors);
   $('#impostors').querySelector('option[value="2"]').disabled = room.settings.targetPlayers < 7;
+  $('#impostors').querySelector('option[value="3"]').disabled = room.settings.targetPlayers < 11;
+  $('#impostors').querySelector('option[value="4"]').disabled = room.settings.targetPlayers < 16;
   $('#auto-bots').checked = room.settings.autoFillBots;
   ['target-players', 'impostors', 'auto-bots'].forEach(function (id) { $('#' + id).disabled = !isHost; });
 
@@ -84,6 +142,7 @@ function renderLobby(room) {
 
 function renderGame(room) {
   show('game');
+  $('#meeting').classList.add('hidden');
   const me = room.players.find(function (p) { return p.id === state.playerId; });
   const viewport = $('#map').getBoundingClientRect();
   const viewWidth = 3600;
@@ -108,6 +167,12 @@ function renderGame(room) {
   $('#position').textContent = me ? 'X ' + Math.round(me.x) + ' / Y ' + Math.round(me.y) : '';
   $('#minimap-player').style.left = (me ? me.x / room.world.width * 100 : 50) + '%';
   $('#minimap-player').style.top = (me ? me.y / room.world.height * 100 : 50) + '%';
+  if (room.emergencyStation) {
+    $('#emergency-console').classList.remove('hidden');
+    place($('#emergency-console'), room.emergencyStation.x, room.emergencyStation.y);
+  } else {
+    $('#emergency-console').classList.add('hidden');
+  }
   $('#corridors-layer').innerHTML = '';
   room.corridors.forEach(function (corridor) {
     const centerX = corridor.x + corridor.w / 2;
@@ -159,16 +224,24 @@ function renderGame(room) {
     node.querySelector('span').textContent = body.nickname;
     $('#bodies-layer').appendChild(node);
   });
-  $('#players-layer').innerHTML = '';
+  const visiblePlayerIds = new Set();
   room.players.forEach(function (player) {
     if (!player.alive || !visible(player.x, player.y, 300)) return;
-    const actor = document.createElement('div');
+    visiblePlayerIds.add(player.id);
+    let actor = $('#players-layer').querySelector('[data-player-id="' + player.id + '"]');
+    if (!actor) {
+      actor = document.createElement('div');
+      actor.dataset.playerId = player.id;
+      actor.innerHTML = '<b class="oxygen-tank"></b><i class="suit-body"></i><em class="suit-legs"><u></u><u></u></em><span></span>';
+      $('#players-layer').appendChild(actor);
+    }
     actor.className = 'actor facing-' + (player.facing || 'down') + ' ' + player.color +
       (player.isBot ? ' bot' : '') + (player.moving ? ' moving' : '');
     place(actor, player.x, player.y);
-    actor.innerHTML = '<b class="oxygen-tank"></b><i class="suit-body"></i><em class="suit-legs"><u></u><u></u></em><span></span>';
     actor.querySelector('span').textContent = player.nickname + (player.isBot ? ' [CPU]' : '');
-    $('#players-layer').appendChild(actor);
+  });
+  Array.from($('#players-layer').children).forEach(function (actor) {
+    if (!visiblePlayerIds.has(actor.dataset.playerId)) actor.remove();
   });
   $('#tasks-layer').innerHTML = '';
   room.tasks.forEach(function (task) {
@@ -184,6 +257,7 @@ function renderGame(room) {
   updateTaskButton(room, me);
   updateDoorButtons(room, me);
   updateAttackButton(room, me);
+  updateMeetingButtons(room, me);
   revealRole(room);
   $('#map').style.setProperty('--vision-size', Math.max(500, room.visionRadius * scale * 2) + 'px');
   if (room.phase === 'ENDED') {
@@ -196,6 +270,22 @@ function renderGame(room) {
   } else {
     $('#result').classList.add('hidden');
   }
+}
+
+function updateMeetingButtons(room, me) {
+  let nearestBody = null;
+  let nearestDistance = Infinity;
+  room.bodies.forEach(function (body) {
+    const d = Math.hypot(me.x - body.x, me.y - body.y);
+    if (d < nearestDistance) { nearestDistance = d; nearestBody = body; }
+  });
+  $('#report').disabled = !room.selfAlive || !nearestBody || nearestDistance > 750 || room.phase !== 'PLAYING';
+  $('#report').dataset.bodyId = nearestBody ? nearestBody.id : '';
+  const station = room.emergencyStation;
+  const stationDistance = station ? Math.hypot(me.x - station.x, me.y - station.y) : Infinity;
+  $('#emergency').disabled = !room.selfAlive || !station || stationDistance > station.radius ||
+    room.emergencyMeetingsLeft < 1 || room.phase !== 'PLAYING';
+  $('#emergency').textContent = room.emergencyMeetingsLeft > 0 ? 'EMERGENCY (' + room.emergencyMeetingsLeft + ')' : 'EMERGENCY USED';
 }
 
 function revealRole(room) {
@@ -247,6 +337,7 @@ function updateTaskButton(room, me) {
   let nearestDistance = Infinity;
   if (me && me.alive && room.selfRole === 'CREW' && me.tasksDone < me.taskGoal) {
     room.tasks.forEach(function (task) {
+      if (room.selfCompletedTaskIds.indexOf(task.id) >= 0) return;
       const d = Math.hypot(me.x - task.x, me.y - task.y);
       if (d < nearestDistance) { nearestDistance = d; nearest = task; }
     });
@@ -255,7 +346,7 @@ function updateTaskButton(room, me) {
   $('#do-task').dataset.taskId = nearest ? nearest.id : '';
 }
 
-for (let i = 4; i <= 10; i += 1) {
+for (let i = 4; i <= 20; i += 1) {
   const option = document.createElement('option'); option.value = String(i); option.textContent = String(i);
   $('#target-players').appendChild(option);
 }
@@ -275,7 +366,7 @@ $('#create').addEventListener('click', async function () {
   catch (e) { errorAt('#home-error', e.message); }
 });
 $('#join').addEventListener('click', async function () {
-  try { enter(await api('/api/rooms/join', { code: $('#room-code').value, nickname: $('#nickname').value, color: state.color })); }
+  try { enter(await api('/api/rooms/join', { code: normalizeRoomCode($('#room-code').value), nickname: $('#nickname').value, color: state.color })); }
   catch (e) { errorAt('#home-error', e.message); }
 });
 $('#ready').addEventListener('click', async function () {
@@ -307,7 +398,12 @@ $('#leave').addEventListener('click', async function () {
   if (state.stream) state.stream.close(); sessionStorage.clear(); location.reload();
 });
 $('#room-code').addEventListener('input', function (event) {
-  event.target.value = event.target.value.toUpperCase().replace(/[^A-Z2-9]/g, '');
+  if (!event.isComposing) event.target.value = normalizeRoomCode(event.target.value);
+});
+$('#room-code').addEventListener('compositionend', function (event) { event.target.value = normalizeRoomCode(event.target.value); });
+$('#room-code').addEventListener('paste', function (event) {
+  event.preventDefault();
+  event.target.value = normalizeRoomCode(event.clipboardData.getData('text'));
 });
 $('#do-task').addEventListener('click', async function () {
   try { await api('/api/task', { taskId: $('#do-task').dataset.taskId }, state.token); }
@@ -321,6 +417,15 @@ $('#sabotage').addEventListener('click', async function () {
   try { await api('/api/sabotage/doors', {}, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
 });
+$('#report').addEventListener('click', async function () {
+  try { await api('/api/report', { bodyId: $('#report').dataset.bodyId }, state.token); }
+  catch (e) { errorAt('#game-error', e.message); }
+});
+$('#emergency').addEventListener('click', async function () {
+  try { await api('/api/meeting/emergency', {}, state.token); }
+  catch (e) { errorAt('#game-error', e.message); }
+});
+$('#vote-skip').addEventListener('click', function () { submitVote(null); });
 $('#attack').addEventListener('click', async function () {
   try { await api('/api/eliminate', { targetId: $('#attack').dataset.targetId }, state.token); }
   catch (e) { errorAt('#game-error', e.message); }

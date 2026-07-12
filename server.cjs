@@ -146,6 +146,21 @@ const server = http.createServer(async function (req, res) {
       publishForToken(token);
       return sendJson(res, 200, { room: result });
     }
+    if (req.method === 'POST' && pathname === '/api/report') {
+      result = store.reportBody(token, body.bodyId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/meeting/emergency') {
+      result = store.callEmergencyMeeting(token);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/meeting/vote') {
+      result = store.voteMeeting(token, body.targetId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
     if (req.method === 'POST' && pathname === '/api/leave') {
       const room = store.leave(token);
       if (room) publishRoom(room.code);

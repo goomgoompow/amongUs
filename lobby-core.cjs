@@ -2,7 +2,8 @@
 
 const crypto = require('crypto');
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const COLORS = ['coral', 'amber', 'mint', 'sky', 'violet', 'rose', 'lime', 'navy', 'white', 'black'];
+const COLORS = ['coral', 'amber', 'mint', 'sky', 'violet', 'rose', 'lime', 'navy', 'white', 'black',
+  'teal', 'orange', 'magenta', 'cyan', 'brown', 'gray', 'gold', 'lavender', 'olive', 'maroon'];
 const BOT_NAMES = ['Atlas', 'Pico', 'Luna', 'Bolt', 'Echo', 'Mochi', 'Pixel', 'Orbit'];
 const WORLD = { width: 30000, height: 20000 };
 const ROOMS = [
@@ -68,7 +69,9 @@ ROOM_LINKS.forEach(function (link, index) {
 });
 const SPAWNS = [
   [14300, 7600], [15000, 7600], [15700, 7600], [14300, 8400], [15000, 8400],
-  [15700, 8400], [14650, 9100], [15350, 9100], [13600, 8400], [16400, 8400]
+  [15700, 8400], [14650, 9100], [15350, 9100], [13600, 8400], [16400, 8400],
+  [13600, 7600], [16400, 7600], [14000, 9200], [16000, 9200], [15000, 9600],
+  [13200, 8000], [16800, 8000], [13200, 8800], [16800, 8800], [15000, 7000]
 ];
 
 function id(bytes) { return crypto.randomBytes(bytes || 18).toString('hex'); }
@@ -145,6 +148,9 @@ function nickname(value) {
   if (!name || name.length > 16 || /[<>]/.test(name)) throw new Error('Nickname must be 1-16 safe characters.');
   return name;
 }
+function normalizeRoomCode(value) {
+  return String(value || '').normalize('NFKC').toUpperCase().replace(/[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g, '').slice(0, 6);
+}
 
 function roomView(room, viewerId) {
   const viewer = room.players.get(viewerId);
@@ -171,8 +177,9 @@ function roomView(room, viewerId) {
     settings: Object.assign({}, room.settings),
     players: players,
     canStart: room.phase === 'LOBBY' && ready && humans.length >= 1,
-    selfRole: (room.phase === 'PLAYING' || room.phase === 'ENDED') && viewer ? viewer.role : null,
+    selfRole: room.phase !== 'LOBBY' && viewer ? viewer.role : null,
     selfAlive: viewer ? viewer.alive !== false : false,
+    selfCompletedTaskIds: viewer ? Array.from(viewer.completedTaskIds || []) : [],
     world: room.phase === 'LOBBY' ? null : WORLD,
     rooms: room.phase === 'LOBBY' ? [] : ROOMS,
     corridors: room.phase === 'LOBBY' ? [] : CORRIDORS,
@@ -186,6 +193,20 @@ function roomView(room, viewerId) {
     bodies: room.phase !== 'LOBBY' && viewer ? room.bodies.filter(function (body) {
       return hasLineOfSight(viewer, body, room);
     }).map(function (body) { return Object.assign({}, body); }) : [],
+    emergencyStation: room.phase === 'PLAYING' ? { x: 15000, y: 8150, radius: 700 } : null,
+    emergencyMeetingsLeft: viewer ? Math.max(0, 1 - (viewer.emergencyMeetingsUsed || 0)) : 0,
+    meeting: room.phase === 'MEETING' && room.meeting ? {
+      id: room.meeting.id, type: room.meeting.type, callerId: room.meeting.callerId,
+      callerName: room.meeting.callerName, reportedName: room.meeting.reportedName,
+      stage: room.meeting.stage,
+      votingRemaining: Math.max(0, (room.meeting.voteEndsAt || 0) - room.gameTime),
+      resultRemaining: Math.max(0, (room.meeting.resultEndsAt || 0) - room.gameTime),
+      hasVoted: viewer ? Object.prototype.hasOwnProperty.call(room.meeting.votes, viewer.id) : false,
+      ownVote: viewer && Object.prototype.hasOwnProperty.call(room.meeting.votes, viewer.id) ? room.meeting.votes[viewer.id] : undefined,
+      participation: Object.keys(room.meeting.votes).length,
+      eligibleVoters: Array.from(room.players.values()).filter(function (player) { return player.alive; }).length,
+      result: room.meeting.result ? Object.assign({}, room.meeting.result) : null
+    } : null,
     taskProgress: room.taskGoal ? room.tasksCompleted / room.taskGoal : 0,
     winner: room.winner,
     message: room.message,
@@ -209,7 +230,7 @@ class LobbyStore {
       players: new Map([[player.id, player]]),
       settings: { targetPlayers: 4, impostors: 1, autoFillBots: true },
       tasksCompleted: 0, taskGoal: 0, winner: null, message: '', gameTime: 0,
-      doorStates: {}, sabotageReadyAt: 0, bodies: []
+      doorStates: {}, sabotageReadyAt: 0, bodies: [], meeting: null, meetingSequence: 0
     };
     this.rooms.set(code, room);
     this.sessions.set(player.token, { roomCode: code, playerId: player.id });
@@ -217,10 +238,12 @@ class LobbyStore {
   }
 
   join(input) {
-    const room = this.rooms.get(String(input.code || '').trim().toUpperCase());
+    const normalizedCode = normalizeRoomCode(input.code);
+    if (normalizedCode.length !== 6) throw new Error('Room code must contain 6 valid characters.');
+    const room = this.rooms.get(normalizedCode);
     if (!room || room.phase !== 'LOBBY') throw new Error('Room is unavailable.');
     const humanCount = Array.from(room.players.values()).filter(function (p) { return !p.isBot; }).length;
-    if (humanCount >= 10) throw new Error('Room is full.');
+    if (humanCount >= 20) throw new Error('Room is full.');
     const name = nickname(input.nickname);
     if (Array.from(room.players.values()).some(function (p) { return p.nickname.toLowerCase() === name.toLowerCase(); })) {
       throw new Error('That nickname is already in use.');
@@ -247,8 +270,8 @@ class LobbyStore {
     if (found.player.id !== found.room.hostId) throw new Error('Only the host can change settings.');
     if (found.room.phase !== 'LOBBY') throw new Error('Settings are locked during a game.');
     const humans = Array.from(found.room.players.values()).filter(function (p) { return !p.isBot; }).length;
-    const target = clamp(Number(input.targetPlayers) || 4, Math.max(4, humans), 10);
-    const maxImpostors = target >= 7 ? 2 : 1;
+    const target = clamp(Number(input.targetPlayers) || 4, Math.max(4, humans), 20);
+    const maxImpostors = target >= 16 ? 4 : (target >= 11 ? 3 : (target >= 7 ? 2 : 1));
     found.room.settings.targetPlayers = target;
     found.room.settings.impostors = clamp(Number(input.impostors) || 1, 1, maxImpostors);
     found.room.settings.autoFillBots = input.autoFillBots !== false;
@@ -280,6 +303,7 @@ class LobbyStore {
     room.doorStates = {};
     room.sabotageReadyAt = 0;
     room.bodies = [];
+    room.meeting = null;
     let spawn = 0;
     room.players.forEach(function (p) {
       p.role = impostorIds.has(p.id) ? 'IMPOSTOR' : 'CREW';
@@ -294,6 +318,7 @@ class LobbyStore {
       p.killReadyAt = p.role === 'IMPOSTOR' ? 8 : 0;
       p.facing = 'down';
       p.movingUntil = 0;
+      p.emergencyMeetingsUsed = 0;
       room.taskGoal += p.taskGoal;
       spawn += 1;
     });
@@ -381,6 +406,7 @@ class LobbyStore {
     room.doorStates = {};
     room.sabotageReadyAt = 0;
     room.bodies = [];
+    room.meeting = null;
     room.players.forEach(function (player) {
       player.role = null;
       player.alive = true;
@@ -394,6 +420,7 @@ class LobbyStore {
       player.botWork = 0;
       player.facing = 'down';
       player.movingUntil = 0;
+      player.emergencyMeetingsUsed = 0;
     });
     this._touch(room);
     return roomView(room, found.player.id);
@@ -420,9 +447,78 @@ class LobbyStore {
     return roomView(room, attacker.id);
   }
 
+  reportBody(token, bodyId) {
+    const found = this.byToken(token);
+    const room = found.room;
+    const reporter = found.player;
+    if (room.phase !== 'PLAYING' || !reporter.alive) throw new Error('Only living players can report during play.');
+    const bodyIndex = room.bodies.findIndex(function (body) { return body.id === bodyId; });
+    const body = bodyIndex >= 0 ? room.bodies[bodyIndex] : null;
+    if (!body || distance(reporter, body) > 750 || !hasLineOfSight(reporter, body, room)) throw new Error('No reportable body nearby.');
+    room.bodies.splice(bodyIndex, 1);
+    this._beginMeeting(room, reporter, 'BODY_REPORT', body.nickname);
+    return roomView(room, reporter.id);
+  }
+
+  callEmergencyMeeting(token) {
+    const found = this.byToken(token);
+    const room = found.room;
+    const caller = found.player;
+    const station = { x: 15000, y: 8150 };
+    if (room.phase !== 'PLAYING' || !caller.alive) throw new Error('Only living players can call a meeting during play.');
+    if (room.gameTime < 15) throw new Error('Emergency meetings unlock 15 seconds after the game starts.');
+    if ((caller.emergencyMeetingsUsed || 0) >= 1) throw new Error('Your emergency meeting has already been used.');
+    if (distance(caller, station) > 700) throw new Error('Move closer to the emergency console.');
+    caller.emergencyMeetingsUsed += 1;
+    this._beginMeeting(room, caller, 'EMERGENCY', null);
+    return roomView(room, caller.id);
+  }
+
+  voteMeeting(token, targetId) {
+    const found = this.byToken(token);
+    const room = found.room;
+    const voter = found.player;
+    if (room.phase !== 'MEETING' || !room.meeting || room.meeting.stage !== 'VOTING') throw new Error('Voting is not active.');
+    if (!voter.alive || voter.isBot) throw new Error('Only living human players can vote here.');
+    if (Object.prototype.hasOwnProperty.call(room.meeting.votes, voter.id)) throw new Error('Your vote is already locked.');
+    let target = null;
+    if (targetId !== null && targetId !== undefined && targetId !== '') {
+      target = room.players.get(String(targetId));
+      if (!target || !target.alive) throw new Error('Vote target is unavailable.');
+    }
+    room.meeting.votes[voter.id] = target ? target.id : null;
+    this._maybeResolveMeeting(room);
+    this._touch(room);
+    return roomView(room, voter.id);
+  }
+
+  _beginMeeting(room, caller, type, reportedName) {
+    room.phase = 'MEETING';
+    room.meetingSequence += 1;
+    const botPlans = {};
+    room.players.forEach(function (player) {
+      if (player.isBot && player.alive) {
+        botPlans[player.id] = { at: room.gameTime + 1 + Math.random() * 5, participate: Math.random() < 0.7, decided: false };
+      }
+    });
+    room.meeting = { id: 'meeting-' + room.meetingSequence, type: type, callerId: caller.id,
+      callerName: caller.nickname, reportedName: reportedName, stage: 'VOTING',
+      voteEndsAt: room.gameTime + 20, resultEndsAt: 0, votes: {}, botPlans: botPlans, result: null };
+    room.doorStates = {};
+    room.players.forEach(function (player) { player.movingUntil = 0; });
+    this._touch(room);
+  }
+
   tick(seconds) {
     const changed = [];
     this.rooms.forEach(function (room) {
+      if (room.phase === 'MEETING') {
+        room.gameTime += seconds;
+        this._updateMeeting(room);
+        this._touch(room);
+        changed.push(room.code);
+        return;
+      }
       if (room.phase !== 'PLAYING') return;
       room.gameTime += seconds;
       let dirty = false;
@@ -509,8 +605,94 @@ class LobbyStore {
     this._touch(room);
   }
 
+  _finishMeeting(room) {
+    room.phase = 'PLAYING';
+    room.meeting = null;
+    let spawn = 0;
+    room.players.forEach(function (player) {
+      if (!player.alive) return;
+      player.x = SPAWNS[spawn % SPAWNS.length][0];
+      player.y = SPAWNS[spawn % SPAWNS.length][1];
+      player.facing = 'down';
+      player.movingUntil = 0;
+      if (player.role === 'IMPOSTOR') player.killReadyAt = room.gameTime + 8;
+      spawn += 1;
+    });
+  }
+
+  _updateMeeting(room) {
+    const meeting = room.meeting;
+    if (!meeting) return;
+    if (meeting.stage === 'RESULT') {
+      if (room.gameTime >= meeting.resultEndsAt) this._finishMeeting(room);
+      return;
+    }
+    Object.keys(meeting.botPlans).forEach(function (botId) {
+      const plan = meeting.botPlans[botId];
+      if (plan.decided || room.gameTime < plan.at) return;
+      plan.decided = true;
+      const bot = room.players.get(botId);
+      if (!plan.participate || !bot || !bot.alive) return;
+      const candidates = Array.from(room.players.values()).filter(function (player) {
+        return player.alive && player.id !== bot.id;
+      });
+      meeting.votes[botId] = Math.random() < 0.15 || !candidates.length
+        ? null : candidates[Math.floor(Math.random() * candidates.length)].id;
+    });
+    this._maybeResolveMeeting(room);
+    if (room.phase === 'MEETING' && meeting.stage === 'VOTING' && room.gameTime >= meeting.voteEndsAt) this._resolveMeeting(room);
+  }
+
+  _maybeResolveMeeting(room) {
+    const meeting = room.meeting;
+    const humansDone = Array.from(room.players.values()).filter(function (player) {
+      return player.alive && !player.isBot;
+    }).every(function (player) { return Object.prototype.hasOwnProperty.call(meeting.votes, player.id); });
+    const botsDone = Object.keys(meeting.botPlans).every(function (botId) { return meeting.botPlans[botId].decided; });
+    if (humansDone && botsDone) this._resolveMeeting(room);
+  }
+
+  _resolveMeeting(room) {
+    const meeting = room.meeting;
+    if (!meeting || meeting.stage !== 'VOTING') return;
+    const eligible = Array.from(room.players.values()).filter(function (player) { return player.alive; }).length;
+    const participation = Object.keys(meeting.votes).length;
+    const tally = {};
+    Object.keys(meeting.votes).forEach(function (voterId) {
+      const key = meeting.votes[voterId] || 'SKIP';
+      tally[key] = (tally[key] || 0) + 1;
+    });
+    let result = { status: 'NO_EJECTION', participation: participation, eligibleVoters: eligible, tally: tally };
+    if (participation <= eligible / 2) {
+      result.status = 'INSUFFICIENT_PARTICIPATION';
+    } else {
+      const entries = Object.keys(tally).map(function (key) { return [key, tally[key]]; })
+        .sort(function (a, b) { return b[1] - a[1]; });
+      const uniqueTop = entries.length && (!entries[1] || entries[0][1] > entries[1][1]);
+      if (uniqueTop && entries[0][0] !== 'SKIP') {
+        const ejected = room.players.get(entries[0][0]);
+        if (ejected && ejected.alive) {
+          ejected.alive = false;
+          ejected.botTarget = null;
+          room.taskGoal = Math.max(room.tasksCompleted, room.taskGoal - Math.max(0, ejected.taskGoal - ejected.tasksDone));
+          result = { status: 'EJECTED', participation: participation, eligibleVoters: eligible, tally: tally,
+            ejectedId: ejected.id, ejectedName: ejected.nickname, wasImpostor: ejected.role === 'IMPOSTOR' };
+          this._checkWin(room);
+          if (room.phase === 'ENDED') return;
+        }
+      } else if (entries.length > 1 && entries[0][1] === entries[1][1]) {
+        result.status = 'TIE';
+      } else if (entries.length && entries[0][0] === 'SKIP') {
+        result.status = 'SKIPPED';
+      }
+    }
+    meeting.result = result;
+    meeting.stage = 'RESULT';
+    meeting.resultEndsAt = room.gameTime + 5;
+  }
+
   _checkWin(room) {
-    if (room.phase !== 'PLAYING') return;
+    if (room.phase !== 'PLAYING' && room.phase !== 'MEETING') return;
     const alive = Array.from(room.players.values()).filter(function (player) { return player.alive; });
     const impostors = alive.filter(function (player) { return player.role === 'IMPOSTOR'; }).length;
     const crew = alive.filter(function (player) { return player.role === 'CREW'; }).length;
@@ -529,7 +711,7 @@ class LobbyStore {
     return {
       id: id(8), token: id(24), nickname: nickname(input.nickname),
       color: COLORS.indexOf(input.color) >= 0 ? input.color : COLORS[0],
-      ready: false, connected: true, isBot: false, role: null, alive: true, killReadyAt: 0, facing: 'down', movingUntil: 0,
+      ready: false, connected: true, isBot: false, role: null, alive: true, killReadyAt: 0, facing: 'down', movingUntil: 0, emergencyMeetingsUsed: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 0, completedTaskIds: new Set()
     };
   }
@@ -542,7 +724,7 @@ class LobbyStore {
     }) || COLORS[room.players.size % COLORS.length];
     const bot = {
       id: 'bot-' + id(5), token: null, nickname: name, color: color,
-      ready: true, connected: true, isBot: true, role: 'CREW', alive: true, killReadyAt: 0, facing: 'down', movingUntil: 0,
+      ready: true, connected: true, isBot: true, role: 'CREW', alive: true, killReadyAt: 0, facing: 'down', movingUntil: 0, emergencyMeetingsUsed: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 2, completedTaskIds: new Set(),
       botTarget: null, botWork: 0
     };

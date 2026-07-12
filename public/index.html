@@ -22,7 +22,7 @@
         <button id="create" class="primary">CREATE ROOM</button>
         <div class="divider"><span>OR JOIN WITH A CODE</span></div>
         <div class="join-row">
-          <input id="room-code" class="code-input" maxlength="6" placeholder="ROOM CODE">
+          <input id="room-code" class="code-input" maxlength="12" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" placeholder="ROOM CODE">
           <button id="join">JOIN</button>
         </div>
         <p id="home-error" class="error" role="alert"></p>
@@ -42,12 +42,12 @@
         <div class="section-title"><h3>Game Settings</h3><span>HOST ONLY</span></div>
         <div class="setting-grid">
           <label>Target players<select id="target-players"></select></label>
-          <label>Impostors<select id="impostors"><option value="1">1</option><option value="2">2</option></select></label>
+          <label>Impostors<select id="impostors"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
           <label class="toggle"><input id="auto-bots" type="checkbox" checked><span>Auto-fill computer players</span></label>
         </div>
       </div>
       <div class="panel roster-panel">
-        <div class="section-title"><h3>Crew Roster</h3><span id="player-count">0 / 10</span></div>
+        <div class="section-title"><h3>Crew Roster</h3><span id="player-count">0 / 20</span></div>
         <ul id="players" class="players"></ul>
       </div>
       <div class="lobby-actions">
@@ -69,6 +69,7 @@
         <div id="rooms-layer"></div>
         <div id="doors-layer"></div>
         <div id="bodies-layer"></div>
+        <div id="emergency-console" class="emergency-console hidden"><b>!</b><span>EMERGENCY</span></div>
         <div id="tasks-layer"></div>
         <div id="players-layer"></div>
         <div class="camera-vignette"></div>
@@ -81,6 +82,8 @@
           <button id="use-door" disabled>OPEN DOOR</button>
           <button id="sabotage" class="danger hidden" disabled>LOCKDOWN</button>
           <button id="attack" class="danger hidden" disabled>ELIMINATE</button>
+          <button id="report" class="report-button" disabled>REPORT</button>
+          <button id="emergency" disabled>EMERGENCY</button>
           <button id="do-task" class="primary task-button" disabled>USE / COMPLETE TASK</button>
         </div>
       </footer>
@@ -92,6 +95,17 @@
       <div id="role-reveal" class="role-reveal hidden">
         <p>YOUR ROLE</p><h2 id="role-reveal-title"></h2><span id="role-reveal-copy"></span>
         <button id="role-reveal-close" class="primary">BEGIN MISSION</button>
+      </div>
+      <div id="meeting" class="meeting hidden">
+        <p class="eyebrow">MEETING CALLED</p>
+        <h2 id="meeting-title">EMERGENCY MEETING</h2>
+        <p id="meeting-detail"></p>
+        <strong id="meeting-timer">20</strong>
+        <p id="meeting-participation"></p>
+        <p id="vote-status" class="vote-status"></p>
+        <div id="meeting-roster" class="meeting-roster"></div>
+        <button id="vote-skip">SKIP VOTE</button>
+        <p class="meeting-note">A result requires more than half of living players to participate.</p>
       </div>
       <p id="game-error" class="error"></p>
     </section>
