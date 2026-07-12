@@ -156,7 +156,8 @@ function roomView(room, viewerId) {
     return {
       id: p.id, nickname: p.nickname, color: p.color, ready: p.ready,
       connected: p.connected, isBot: p.isBot, x: p.x, y: p.y,
-      tasksDone: p.tasksDone, taskGoal: p.taskGoal
+      tasksDone: p.tasksDone, taskGoal: p.taskGoal, alive: p.alive,
+      isImpostorAlly: Boolean(viewer && viewer.role === 'IMPOSTOR' && p.role === 'IMPOSTOR')
     };
   });
   const humans = players.filter(function (p) { return !p.isBot; });
@@ -169,22 +170,27 @@ function roomView(room, viewerId) {
     settings: Object.assign({}, room.settings),
     players: players,
     canStart: room.phase === 'LOBBY' && ready && humans.length >= 1,
-    selfRole: room.phase === 'PLAYING' && viewer ? viewer.role : null,
-    world: room.phase === 'PLAYING' ? WORLD : null,
-    rooms: room.phase === 'PLAYING' ? ROOMS : [],
-    corridors: room.phase === 'PLAYING' ? CORRIDORS : [],
-    doors: room.phase === 'PLAYING' ? DOORS.map(function (door) {
+    selfRole: (room.phase === 'PLAYING' || room.phase === 'ENDED') && viewer ? viewer.role : null,
+    selfAlive: viewer ? viewer.alive !== false : false,
+    world: room.phase === 'LOBBY' ? null : WORLD,
+    rooms: room.phase === 'LOBBY' ? [] : ROOMS,
+    corridors: room.phase === 'LOBBY' ? [] : CORRIDORS,
+    doors: room.phase === 'LOBBY' ? [] : DOORS.map(function (door) {
       return { id: door.id, x: door.x, y: door.y, w: door.w, h: door.h,
         closed: isDoorClosed(room, door.id), remaining: Math.max(0, (room.doorStates[door.id] || 0) - room.gameTime) };
-    }) : [],
+    }),
     tasks: room.phase === 'PLAYING' ? TASKS.map(function (task) {
       return { id: task.id, label: task.label, x: task.x, y: task.y };
     }) : [],
+    bodies: room.phase !== 'LOBBY' && viewer ? room.bodies.filter(function (body) {
+      return hasLineOfSight(viewer, body, room);
+    }).map(function (body) { return Object.assign({}, body); }) : [],
     taskProgress: room.taskGoal ? room.tasksCompleted / room.taskGoal : 0,
     winner: room.winner,
     message: room.message,
     visionRadius: viewer && viewer.role === 'IMPOSTOR' ? 3600 : 2700,
-    sabotageCooldown: Math.max(0, (room.sabotageReadyAt || 0) - (room.gameTime || 0))
+    sabotageCooldown: Math.max(0, (room.sabotageReadyAt || 0) - (room.gameTime || 0)),
+    killCooldown: viewer && viewer.role === 'IMPOSTOR' ? Math.max(0, (viewer.killReadyAt || 0) - (room.gameTime || 0)) : 0
   };
 }
 
@@ -202,7 +208,7 @@ class LobbyStore {
       players: new Map([[player.id, player]]),
       settings: { targetPlayers: 4, impostors: 1, autoFillBots: true },
       tasksCompleted: 0, taskGoal: 0, winner: null, message: '', gameTime: 0,
-      doorStates: {}, sabotageReadyAt: 0
+      doorStates: {}, sabotageReadyAt: 0, bodies: []
     };
     this.rooms.set(code, room);
     this.sessions.set(player.token, { roomCode: code, playerId: player.id });
@@ -272,6 +278,7 @@ class LobbyStore {
     room.gameTime = 0;
     room.doorStates = {};
     room.sabotageReadyAt = 0;
+    room.bodies = [];
     let spawn = 0;
     room.players.forEach(function (p) {
       p.role = impostorIds.has(p.id) ? 'IMPOSTOR' : 'CREW';
@@ -282,6 +289,8 @@ class LobbyStore {
       p.completedTaskIds = new Set();
       p.botTarget = null;
       p.botWork = 0;
+      p.alive = true;
+      p.killReadyAt = p.role === 'IMPOSTOR' ? 8 : 0;
       room.taskGoal += p.taskGoal;
       spawn += 1;
     });
@@ -293,6 +302,7 @@ class LobbyStore {
   move(token, input) {
     const found = this.byToken(token);
     if (found.room.phase !== 'PLAYING') return roomView(found.room, found.player.id);
+    if (!found.player.alive) throw new Error('Eliminated players cannot move.');
     const dx = clamp(Number(input.dx) || 0, -1, 1);
     const dy = clamp(Number(input.dy) || 0, -1, 1);
     const length = Math.hypot(dx, dy) || 1;
@@ -308,7 +318,7 @@ class LobbyStore {
     const found = this.byToken(token);
     const player = found.player;
     const task = TASKS.find(function (t) { return t.id === taskId; });
-    if (found.room.phase !== 'PLAYING' || player.role !== 'CREW') throw new Error('Crew tasks only.');
+    if (found.room.phase !== 'PLAYING' || player.role !== 'CREW' || !player.alive) throw new Error('Living crew tasks only.');
     if (!task || distance(player, task) > 520) throw new Error('Move closer to the task station.');
     if (player.completedTaskIds.has(task.id)) throw new Error('Task already completed.');
     if (player.tasksDone >= player.taskGoal) throw new Error('Your tasks are complete.');
@@ -323,8 +333,10 @@ class LobbyStore {
     const center = { x: door.x + door.w / 2, y: door.y + door.h / 2 };
     if (distance(found.player, center) > 850) throw new Error('Move closer to the door.');
     const closed = isDoorClosed(found.room, door.id);
+    if (!found.player.alive) throw new Error('Eliminated players cannot use doors.');
     if (found.player.role === 'IMPOSTOR') {
-      found.room.doorStates[door.id] = closed ? 0 : found.room.gameTime + 12;
+      if (closed) throw new Error('Door is already locked.');
+      found.room.doorStates[door.id] = found.room.gameTime + 12;
     } else {
       if (!closed) throw new Error('Door is already open.');
       found.room.doorStates[door.id] = 0;
@@ -335,7 +347,7 @@ class LobbyStore {
 
   sabotageDoors(token) {
     const found = this.byToken(token);
-    if (found.room.phase !== 'PLAYING' || found.player.role !== 'IMPOSTOR') throw new Error('Impostor ability only.');
+    if (found.room.phase !== 'PLAYING' || found.player.role !== 'IMPOSTOR' || !found.player.alive) throw new Error('Living impostor ability only.');
     if (found.room.sabotageReadyAt > found.room.gameTime) throw new Error('Sabotage is cooling down.');
     const nearest = DOORS.slice().sort(function (a, b) {
       const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
@@ -348,6 +360,27 @@ class LobbyStore {
     return roomView(found.room, found.player.id);
   }
 
+  eliminate(token, targetId) {
+    const found = this.byToken(token);
+    const room = found.room;
+    const attacker = found.player;
+    const target = room.players.get(String(targetId || ''));
+    if (room.phase !== 'PLAYING' || attacker.role !== 'IMPOSTOR' || !attacker.alive) throw new Error('Living impostor ability only.');
+    if (attacker.killReadyAt > room.gameTime) throw new Error('Attack is cooling down.');
+    if (!target || !target.alive || target.role !== 'CREW') throw new Error('Target is unavailable.');
+    if (distance(attacker, target) > 650 || !hasLineOfSight(attacker, target, room)) throw new Error('Target is out of range.');
+    target.alive = false;
+    target.botTarget = null;
+    const remainingTasks = Math.max(0, target.taskGoal - target.tasksDone);
+    room.taskGoal = Math.max(room.tasksCompleted, room.taskGoal - remainingTasks);
+    room.bodies.push({ id: 'body-' + target.id + '-' + Math.round(room.gameTime * 10), playerId: target.id,
+      nickname: target.nickname, color: target.color, x: target.x, y: target.y });
+    attacker.killReadyAt = room.gameTime + 18;
+    this._checkWin(room);
+    this._touch(room);
+    return roomView(room, attacker.id);
+  }
+
   tick(seconds) {
     const changed = [];
     this.rooms.forEach(function (room) {
@@ -355,7 +388,7 @@ class LobbyStore {
       room.gameTime += seconds;
       let dirty = false;
       room.players.forEach(function (bot) {
-        if (!bot.isBot || bot.role !== 'CREW' || bot.tasksDone >= bot.taskGoal) return;
+        if (!bot.isBot || !bot.alive || bot.role !== 'CREW' || bot.tasksDone >= bot.taskGoal) return;
         if (!bot.botTarget || bot.completedTaskIds.has(bot.botTarget)) {
           const available = TASKS.filter(function (t) { return !bot.completedTaskIds.has(t.id); });
           bot.botTarget = available[Math.floor(Math.random() * available.length)].id;
@@ -430,19 +463,31 @@ class LobbyStore {
     player.completedTaskIds.add(taskId);
     player.tasksDone += 1;
     room.tasksCompleted += 1;
-    if (room.tasksCompleted >= room.taskGoal) {
+    this._checkWin(room);
+    this._touch(room);
+  }
+
+  _checkWin(room) {
+    if (room.phase !== 'PLAYING') return;
+    const alive = Array.from(room.players.values()).filter(function (player) { return player.alive; });
+    const impostors = alive.filter(function (player) { return player.role === 'IMPOSTOR'; }).length;
+    const crew = alive.filter(function (player) { return player.role === 'CREW'; }).length;
+    if (impostors > 0 && impostors >= crew) {
+      room.phase = 'ENDED';
+      room.winner = 'IMPOSTOR';
+      room.message = 'The impostors took control of the station.';
+    } else if (room.tasksCompleted >= room.taskGoal) {
       room.phase = 'ENDED';
       room.winner = 'CREW';
       room.message = 'All tasks completed. Crew wins!';
     }
-    this._touch(room);
   }
 
   _human(input) {
     return {
       id: id(8), token: id(24), nickname: nickname(input.nickname),
       color: COLORS.indexOf(input.color) >= 0 ? input.color : COLORS[0],
-      ready: false, connected: true, isBot: false, role: null,
+      ready: false, connected: true, isBot: false, role: null, alive: true, killReadyAt: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 0, completedTaskIds: new Set()
     };
   }
@@ -455,7 +500,7 @@ class LobbyStore {
     }) || COLORS[room.players.size % COLORS.length];
     const bot = {
       id: 'bot-' + id(5), token: null, nickname: name, color: color,
-      ready: true, connected: true, isBot: true, role: 'CREW',
+      ready: true, connected: true, isBot: true, role: 'CREW', alive: true, killReadyAt: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 2, completedTaskIds: new Set(),
       botTarget: null, botWork: 0
     };

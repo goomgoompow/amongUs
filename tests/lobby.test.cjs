@@ -41,6 +41,7 @@ assert.strictEqual(store.viewForToken(impostorToken).doors.find(function (d) { r
 Object.assign(store.byToken(crewToken).player, doorCenter);
 store.useDoor(crewToken, testDoor.id);
 assert.strictEqual(store.viewForToken(crewToken).doors.find(function (d) { return d.id === testDoor.id; }).closed, false, 'Crew can open a locked nearby door');
+assert.throws(function () { store.useDoor(crewToken, testDoor.id); }, /already open/, 'Crew cannot lock an open door');
 store.sabotageDoors(impostorToken);
 assert.strictEqual(store.viewForToken(impostorToken).doors.filter(function (d) { return d.closed; }).length, 5);
 assert(store.viewForToken(impostorToken).sabotageCooldown > 0);
@@ -56,7 +57,7 @@ for (let i = 0; i < 1500 && store.viewForToken(host.token).phase === 'PLAYING'; 
 }
 const afterBots = store.viewForToken(host.token);
 const rawBots = Array.from(store.byToken(host.token).room.players.values()).filter(function (p) { return p.isBot; });
-assert.strictEqual(rawBots.every(function (p) { return p.tasksDone === 2; }), true);
+assert.strictEqual(rawBots.every(function (p) { return !p.alive || p.tasksDone === 2; }), true);
 assert(afterBots.taskProgress >= 0.5, 'Computer tasks contribute to shared progress');
 
 const crewView = store.viewForToken(crewToken);
@@ -69,4 +70,23 @@ for (const task of crewView.tasks.slice(0, 2)) {
 assert.strictEqual(store.viewForToken(crewToken).phase, 'ENDED');
 assert.strictEqual(store.viewForToken(crewToken).winner, 'CREW');
 
-console.log('Lobby, bots, roles, movement and task victory tests passed.');
+const combatStore = new LobbyStore();
+const loneImpostor = combatStore.create({ nickname: 'Hunter', color: 'coral' });
+combatStore.start(loneImpostor.token);
+const combatRoom = combatStore.byToken(loneImpostor.token).room;
+const attacker = combatStore.byToken(loneImpostor.token).player;
+assert.strictEqual(attacker.role, 'IMPOSTOR');
+combatRoom.gameTime = attacker.killReadyAt;
+const victims = Array.from(combatRoom.players.values()).filter(function (p) { return p.role === 'CREW'; });
+Object.assign(victims[0], { x: attacker.x + 100, y: attacker.y });
+combatStore.eliminate(loneImpostor.token, victims[0].id);
+assert.strictEqual(victims[0].alive, false);
+assert.strictEqual(combatRoom.bodies.length, 1);
+assert.throws(function () { combatStore.eliminate(loneImpostor.token, victims[1].id); }, /cooling down/);
+combatRoom.gameTime = attacker.killReadyAt;
+Object.assign(victims[1], { x: attacker.x + 100, y: attacker.y });
+combatStore.eliminate(loneImpostor.token, victims[1].id);
+assert.strictEqual(combatStore.viewForToken(loneImpostor.token).phase, 'ENDED');
+assert.strictEqual(combatStore.viewForToken(loneImpostor.token).winner, 'IMPOSTOR');
+
+console.log('Lobby, roles, doors, combat, bots and victory tests passed.');

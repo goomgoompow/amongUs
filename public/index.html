@@ -68,6 +68,7 @@
         <div id="corridors-layer"></div>
         <div id="rooms-layer"></div>
         <div id="doors-layer"></div>
+        <div id="bodies-layer"></div>
         <div id="tasks-layer"></div>
         <div id="players-layer"></div>
         <div class="camera-vignette"></div>
@@ -79,10 +80,15 @@
         <div class="action-buttons">
           <button id="use-door" disabled>OPEN DOOR</button>
           <button id="sabotage" class="danger hidden" disabled>LOCKDOWN</button>
+          <button id="attack" class="danger hidden" disabled>ELIMINATE</button>
           <button id="do-task" class="primary task-button" disabled>USE / COMPLETE TASK</button>
         </div>
       </footer>
       <div id="result" class="result hidden"><h2 id="result-title"></h2><p id="result-message"></p></div>
+      <div id="role-reveal" class="role-reveal hidden">
+        <p>YOUR ROLE</p><h2 id="role-reveal-title"></h2><span id="role-reveal-copy"></span>
+        <button id="role-reveal-close" class="primary">BEGIN MISSION</button>
+      </div>
       <p id="game-error" class="error"></p>
     </section>
   </main>

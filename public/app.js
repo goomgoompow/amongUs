@@ -99,7 +99,7 @@ function renderGame(room) {
     node.style.left = ((x - left) * scale) + 'px';
     node.style.top = ((y - top) * scale) + 'px';
   };
-  $('#role').textContent = room.selfRole || 'CREW';
+  $('#role').textContent = (room.selfRole || 'CREW') + (room.selfAlive ? ' / ALIVE' : ' / ELIMINATED');
   $('#role').className = room.selfRole === 'IMPOSTOR' ? 'impostor-role' : 'crew-role';
   $('#game-code').textContent = room.code;
   $('#task-progress').style.width = Math.round(room.taskProgress * 100) + '%';
@@ -148,9 +148,19 @@ function renderGame(room) {
     node.textContent = door.closed ? Math.ceil(door.remaining) : '';
     $('#doors-layer').appendChild(node);
   });
+  $('#bodies-layer').innerHTML = '';
+  room.bodies.forEach(function (body) {
+    if (!visible(body.x, body.y, 350)) return;
+    const node = document.createElement('div');
+    node.className = 'body-marker ' + body.color;
+    place(node, body.x, body.y);
+    node.innerHTML = '<i></i><span></span>';
+    node.querySelector('span').textContent = body.nickname;
+    $('#bodies-layer').appendChild(node);
+  });
   $('#players-layer').innerHTML = '';
   room.players.forEach(function (player) {
-    if (!visible(player.x, player.y, 300)) return;
+    if (!player.alive || !visible(player.x, player.y, 300)) return;
     const actor = document.createElement('div');
     actor.className = 'actor ' + player.color + (player.isBot ? ' bot' : '');
     place(actor, player.x, player.y);
@@ -171,12 +181,41 @@ function renderGame(room) {
   });
   updateTaskButton(room, me);
   updateDoorButtons(room, me);
+  updateAttackButton(room, me);
+  revealRole(room);
   $('#map').style.setProperty('--vision-size', Math.max(500, room.visionRadius * scale * 2) + 'px');
   if (room.phase === 'ENDED') {
     $('#result').classList.remove('hidden');
     $('#result-title').textContent = room.winner + ' VICTORY';
     $('#result-message').textContent = room.message;
   }
+}
+
+function revealRole(room) {
+  const key = 'role-seen-' + room.code;
+  if (!room.selfRole || sessionStorage.getItem(key) === room.selfRole) return;
+  $('#role-reveal').classList.remove('hidden');
+  $('#role-reveal').classList.toggle('impostor', room.selfRole === 'IMPOSTOR');
+  $('#role-reveal-title').textContent = room.selfRole;
+  $('#role-reveal-copy').textContent = room.selfRole === 'IMPOSTOR'
+    ? 'Blend in, lock doors, and eliminate the crew.'
+    : 'Complete tasks and survive the impostor.';
+}
+
+function updateAttackButton(room, me) {
+  let nearest = null;
+  let nearestDistance = Infinity;
+  if (room.selfRole === 'IMPOSTOR' && room.selfAlive) {
+    room.players.forEach(function (player) {
+      if (player.id === state.playerId || !player.alive || player.isImpostorAlly) return;
+      const d = Math.hypot(me.x - player.x, me.y - player.y);
+      if (d < nearestDistance) { nearestDistance = d; nearest = player; }
+    });
+  }
+  $('#attack').classList.toggle('hidden', room.selfRole !== 'IMPOSTOR');
+  $('#attack').disabled = !nearest || nearestDistance > 650 || room.killCooldown > 0 || room.phase !== 'PLAYING' || !room.selfAlive;
+  $('#attack').dataset.targetId = nearest ? nearest.id : '';
+  $('#attack').textContent = room.killCooldown > 0 ? 'ELIMINATE ' + Math.ceil(room.killCooldown) : 'ELIMINATE';
 }
 
 function updateDoorButtons(room, me) {
@@ -186,7 +225,8 @@ function updateDoorButtons(room, me) {
     const d = Math.hypot(me.x - (door.x + door.w / 2), me.y - (door.y + door.h / 2));
     if (d < nearestDistance) { nearestDistance = d; nearest = door; }
   });
-  const canUse = nearest && nearestDistance <= 850 && (room.selfRole === 'IMPOSTOR' || nearest.closed);
+  const canUse = nearest && nearestDistance <= 850 && room.selfAlive &&
+    ((room.selfRole === 'IMPOSTOR' && !nearest.closed) || (room.selfRole !== 'IMPOSTOR' && nearest.closed));
   $('#use-door').disabled = !canUse || room.phase !== 'PLAYING';
   $('#use-door').dataset.doorId = nearest ? nearest.id : '';
   $('#use-door').textContent = nearest && nearest.closed ? 'OPEN DOOR' : 'LOCK DOOR';
@@ -198,7 +238,7 @@ function updateDoorButtons(room, me) {
 function updateTaskButton(room, me) {
   let nearest = null;
   let nearestDistance = Infinity;
-  if (me && room.selfRole === 'CREW' && me.tasksDone < me.taskGoal) {
+  if (me && me.alive && room.selfRole === 'CREW' && me.tasksDone < me.taskGoal) {
     room.tasks.forEach(function (task) {
       const d = Math.hypot(me.x - task.x, me.y - task.y);
       if (d < nearestDistance) { nearestDistance = d; nearest = task; }
@@ -273,6 +313,14 @@ $('#use-door').addEventListener('click', async function () {
 $('#sabotage').addEventListener('click', async function () {
   try { await api('/api/sabotage/doors', {}, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
+});
+$('#attack').addEventListener('click', async function () {
+  try { await api('/api/eliminate', { targetId: $('#attack').dataset.targetId }, state.token); }
+  catch (e) { errorAt('#game-error', e.message); }
+});
+$('#role-reveal-close').addEventListener('click', function () {
+  if (state.room && state.room.selfRole) sessionStorage.setItem('role-seen-' + state.room.code, state.room.selfRole);
+  $('#role-reveal').classList.add('hidden');
 });
 
 window.addEventListener('keydown', function (event) {

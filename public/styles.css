@@ -191,6 +191,20 @@ select {
 .danger { background: #b43d43; color: white; border-color: #e36b70; }
 .result { position: absolute; inset: 0; z-index: 10; display: grid; place-content: center; text-align: center; background: rgba(2,6,11,.9); border-radius: 16px; }
 .result h2 { font-size: clamp(42px, 8vw, 86px); color: var(--cyan); }
+.role-reveal {
+  position: fixed; inset: 0; z-index: 30; display: grid; place-content: center; justify-items: center;
+  padding: 30px; text-align: center; background: radial-gradient(circle, rgba(18,77,82,.96), rgba(2,6,11,.99) 62%);
+}
+.role-reveal.impostor { background: radial-gradient(circle, rgba(111,27,31,.97), rgba(2,6,11,.99) 62%); }
+.role-reveal p { color: var(--muted); letter-spacing: .28em; font-weight: 900; }
+.role-reveal h2 { margin: 12px 0; font-size: clamp(60px, 13vw, 150px); color: var(--cyan); letter-spacing: -.05em; }
+.role-reveal.impostor h2 { color: #ff6b63; text-shadow: 0 0 45px rgba(255,75,70,.5); }
+.role-reveal span { color: #c8d5e1; font-size: 17px; margin-bottom: 30px; }
+.role-reveal button { width: min(320px, 80vw); }
+.body-marker { position: absolute; z-index: 4; transform: translate(-50%, -50%); }
+.body-marker i { display: block; width: 42px; height: 22px; border-radius: 15px 10px 10px 15px; background: var(--swatch); border: 3px solid rgba(0,0,0,.45); transform: rotate(-12deg); }
+.body-marker i::after { content: ""; position: absolute; right: -13px; top: 5px; width: 20px; height: 6px; background: #e7edf2; border: 2px solid #5d6770; }
+.body-marker span { position: absolute; top: 27px; left: 50%; transform: translateX(-50%); white-space: nowrap; color: #ffaaa5; font-size: 10px; }
 
 @media (max-width: 700px) {
   .setting-grid, .game-hud { grid-template-columns: 1fr 1fr; }
