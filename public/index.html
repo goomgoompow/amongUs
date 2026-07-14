@@ -44,6 +44,12 @@
           <label>Target players<select id="target-players"></select></label>
           <label>Impostors<select id="impostors"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
           <label class="toggle"><input id="auto-bots" type="checkbox" checked><span>Auto-fill computer players</span></label>
+          <label class="toggle"><input id="vengeful-spirits" type="checkbox" checked><span>Enable vengeful spirits</span></label>
+          <label class="toggle"><input id="reveal-impostors" type="checkbox" checked><span>임포스터 구분 표시</span></label>
+          <label>Phantom duration (sec)<input id="phantom-duration" type="number" min="3" max="20" value="8"></label>
+          <label>Body melt delay (sec)<input id="melt-delay" type="number" min="5" max="60" value="20"></label>
+          <label>Disguise duration (sec)<input id="disguise-duration" type="number" min="5" max="30" value="12"></label>
+          <label>Disguise cooldown (sec)<input id="disguise-cooldown" type="number" min="15" max="90" value="35"></label>
         </div>
       </div>
       <div class="panel roster-panel">
@@ -62,17 +68,23 @@
       <header class="game-hud">
         <div><span class="eyebrow">MISSION IN PROGRESS</span><strong id="role">ROLE</strong></div>
         <div class="progress-wrap"><span>TASKS</span><div class="progress"><i id="task-progress"></i></div><strong id="task-count">0 / 0</strong></div>
-        <div><span>ROOM</span><strong id="game-code">------</strong></div>
+        <div><span>ROOM</span><strong id="game-code">------</strong><div class="hud-buttons"><button id="sound-toggle" class="sound-toggle" type="button">SOUND ON</button><button id="game-leave" class="game-leave" type="button">방 나가기</button></div></div>
       </header>
       <div id="map" class="map" tabindex="0" aria-label="Game map">
+        <div id="game-notice" class="game-notice hidden"></div>
+        <div id="cooldown-countdown" class="cooldown-countdown hidden"></div>
         <div id="corridors-layer"></div>
         <div id="rooms-layer"></div>
         <div id="doors-layer"></div>
         <div id="bodies-layer"></div>
+        <div id="traps-layer"></div>
+        <div id="spirits-layer"></div>
         <div id="vents-layer"></div>
         <div id="emergency-console" class="emergency-console hidden"><b>!</b><span>EMERGENCY</span></div>
         <div id="tasks-layer"></div>
         <div id="players-layer"></div>
+        <div id="phantom-veil" class="phantom-veil hidden"><strong>VANISHED</strong><span>CREW CANNOT SEE YOU</span></div>
+        <div id="spirit-warning" class="spirit-warning hidden">임포스터에 의해 살해된 크루원의 영혼이 악령이 되어 나타납니다</div>
         <div class="camera-vignette"></div>
         <div class="coordinates"><span id="position">X 0 / Y 0</span><span>WORLD 30,000 x 20,000</span></div>
         <div id="minimap" class="minimap">
@@ -82,7 +94,7 @@
         </div>
       </div>
       <footer class="game-controls">
-        <div><strong id="personal-tasks">0 / 0 TASKS</strong><span>Move with WASD or arrow keys</span></div>
+        <div><strong id="personal-tasks">0 / 0 TASKS</strong><span>Move with WASD or arrow keys</span><div id="crew-ability" class="crew-ability hidden"><b id="crew-role"></b><select id="ability-target"></select><button id="place-trap" type="button">PLACE TRAP</button><button id="view-trap" type="button">VIEW TRAP</button><button id="track-player" type="button">TRACK</button><button id="detect-player" type="button">DETECT</button><small id="ability-info"></small></div><div id="impostor-ability" class="crew-ability impostor-ability hidden"><b id="impostor-role"></b><select id="disguise-target"></select><button id="phantom-hide" type="button">VANISH</button><button id="disguise-player" type="button">DISGUISE</button><small id="impostor-ability-info"></small></div></div>
         <div class="action-buttons">
           <button id="use-door" disabled>OPEN DOOR</button>
           <button id="sabotage" class="danger hidden" disabled>LOCKDOWN</button>
@@ -103,6 +115,7 @@
         <button id="role-reveal-close" class="primary">BEGIN MISSION</button>
       </div>
       <div id="meeting" class="meeting hidden">
+        <button id="meeting-leave" class="overlay-leave" type="button">방 나가기</button>
         <p class="eyebrow">MEETING CALLED</p>
         <h2 id="meeting-title">EMERGENCY MEETING</h2>
         <p id="meeting-detail"></p>
@@ -110,8 +123,9 @@
         <p id="meeting-participation"></p>
         <p id="vote-status" class="vote-status"></p>
         <div id="meeting-roster" class="meeting-roster"></div>
+        <div class="meeting-chat"><div id="meeting-messages"></div><form id="meeting-chat-form"><input id="meeting-chat-input" maxlength="120" autocomplete="off" placeholder="대화 메시지 입력"><button type="submit">SEND</button></form></div>
         <button id="vote-skip">SKIP VOTE</button>
-        <p class="meeting-note">A result requires more than half of living players to participate.</p>
+        <p id="meeting-rule" class="meeting-note"></p>
       </div>
       <div id="ejection" class="ejection hidden">
         <div class="stars"></div>
@@ -120,6 +134,7 @@
         <p id="ejection-role"></p>
         <span id="ejection-timer"></span>
       </div>
+      <div id="trap-monitor" class="trap-monitor hidden"><header><div><b>ENGINEER TRAP FEED</b><span id="trap-monitor-room"></span></div><button id="close-trap-monitor" type="button">CLOSE</button></header><div id="trap-monitor-feed"></div><p>LIVE FEED · IDENTITIES ONLY · ROLES HIDDEN</p></div>
       <p id="game-error" class="error"></p>
     </section>
   </main>

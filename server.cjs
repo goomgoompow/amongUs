@@ -126,6 +126,31 @@ const server = http.createServer(async function (req, res) {
       publishForToken(token);
       return sendJson(res, 200, { room: result });
     }
+    if (req.method === 'POST' && pathname === '/api/ability/trap') {
+      result = store.placeTrap(token);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/ability/track') {
+      result = store.trackPlayer(token, body.targetId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/ability/detect') {
+      result = store.detectPlayer(token, body.targetId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/ability/phantom') {
+      result = store.activatePhantom(token);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/ability/disguise') {
+      result = store.disguisePlayer(token, body.targetId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
     if (req.method === 'POST' && pathname === '/api/door') {
       result = store.useDoor(token, body.doorId);
       publishForToken(token);
@@ -163,6 +188,11 @@ const server = http.createServer(async function (req, res) {
     }
     if (req.method === 'POST' && pathname === '/api/meeting/vote') {
       result = store.voteMeeting(token, body.targetId);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/meeting/chat') {
+      result = store.sendMeetingMessage(token, body.message);
       publishForToken(token);
       return sendJson(res, 200, { room: result });
     }
