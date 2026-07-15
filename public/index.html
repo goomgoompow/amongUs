@@ -19,12 +19,11 @@
         <label for="nickname">CALL SIGN</label>
         <input id="nickname" maxlength="16" autocomplete="nickname" placeholder="Enter nickname">
         <fieldset><legend>SUIT COLOR</legend><div id="colors" class="colors"></div></fieldset>
+        <button id="home-sound-toggle" class="sound-toggle home-sound-toggle" type="button">START MUSIC</button>
         <button id="create" class="primary">CREATE ROOM</button>
-        <div class="divider"><span>OR JOIN WITH A CODE</span></div>
-        <div class="join-row">
-          <input id="room-code" class="code-input" maxlength="12" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" placeholder="ROOM CODE">
-          <button id="join">JOIN</button>
-        </div>
+        <div class="divider"><span>OPEN ROOMS</span></div>
+        <div class="room-browser-header"><strong>입장 가능한 방</strong><button id="refresh-rooms" type="button">새로고침</button></div>
+        <div id="open-rooms" class="open-rooms"><p>방 목록을 불러오는 중...</p></div>
         <p id="home-error" class="error" role="alert"></p>
       </div>
     </section>
@@ -32,7 +31,7 @@
     <section id="lobby" class="shell hidden">
       <header class="lobby-header">
         <div><p class="eyebrow">ASSEMBLY DECK</p><h2>Mission Setup</h2></div>
-        <button id="leave" class="ghost">LEAVE</button>
+        <div class="lobby-header-actions"><button id="lobby-sound-toggle" class="sound-toggle" type="button">SOUND ON</button><button id="leave" class="ghost">LEAVE</button></div>
       </header>
       <div class="code-card">
         <div><span>INVITE CODE</span><strong id="display-code">------</strong></div>
@@ -134,7 +133,7 @@
         <p id="ejection-role"></p>
         <span id="ejection-timer"></span>
       </div>
-      <div id="trap-monitor" class="trap-monitor hidden"><header><div><b>ENGINEER TRAP FEED</b><span id="trap-monitor-room"></span></div><button id="close-trap-monitor" type="button">CLOSE</button></header><div id="trap-monitor-feed"></div><p>LIVE FEED · IDENTITIES ONLY · ROLES HIDDEN</p></div>
+      <div id="trap-monitor" class="trap-monitor hidden"><header><div><b>TRAP CAM</b><span id="trap-monitor-room"></span></div><button id="close-trap-monitor" type="button" aria-label="Close trap camera">×</button></header><div id="trap-monitor-feed"></div><p>LIVE · ROLES HIDDEN</p></div>
       <p id="game-error" class="error"></p>
     </section>
   </main>

@@ -6,26 +6,44 @@ const state = {
   token: sessionStorage.getItem('station-token'),
   playerId: sessionStorage.getItem('station-player'),
   room: null, color: 'coral', stream: null, keys: new Set(), moving: false,
-  meetingId: null, pendingVote: undefined, noticeUntil: 0, selectedVentId: null, trapMonitorOpen: false
+  meetingId: null, pendingVote: undefined, noticeUntil: 0, selectedVentId: null, trapMonitorOpen: false,
+  joiningRoom: false
 };
 const $ = function (selector) { return document.querySelector(selector); };
 const sections = { home: $('#home'), lobby: $('#lobby'), game: $('#game') };
-const audio = { context: null, master: null, started: false, ambient: false,
-  muted: localStorage.getItem('station-muted') === 'true' };
+const audio = { context: null, master: null, musicGain: null, started: false,
+  muted: localStorage.getItem('station-muted') === 'true', musicMode: null, desiredMusicMode: null,
+  musicTimer: null, musicStep: 0 };
+const MUSIC_TRACKS = {
+  lobby: { interval: 560, sustain: 0.5, type: 'sine', volume: 0.13,
+    notes: [220, 277.18, 329.63, 415.3, 246.94, 293.66, 369.99, 440], bass: [110, 123.47] },
+  play: { interval: 380, sustain: 0.32, type: 'triangle', volume: 0.105,
+    notes: [220, 164.81, 246.94, 185, 220, 174.61, 261.63, 196], bass: [55, 61.74] },
+  meeting: { interval: 260, sustain: 0.2, type: 'square', volume: 0.085,
+    notes: [196, 233.08, 196, 174.61, 196, 261.63, 233.08, 174.61], bass: [98, 87.31] }
+};
 
 function ensureAudio() {
   if (audio.started) {
-    if (audio.context && audio.context.state === 'suspended') audio.context.resume();
+    if (audio.context && audio.context.state === 'suspended') {
+      audio.context.resume().then(function () { restartMusic(); }).catch(function () {});
+    } else if (audio.desiredMusicMode && !audio.musicTimer) restartMusic();
     return;
   }
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
   audio.context = new AudioContext();
   audio.master = audio.context.createGain();
-  audio.master.gain.value = audio.muted ? 0 : 0.7;
+  audio.master.gain.value = audio.muted ? 0 : 0.82;
   audio.master.connect(audio.context.destination);
+  audio.musicGain = audio.context.createGain();
+  audio.musicGain.gain.value = 0.78;
+  audio.musicGain.connect(audio.master);
   audio.started = true;
-  startAmbient();
+  audio.context.onstatechange = updateSoundButtons;
+  if (audio.context.state === 'suspended') {
+    audio.context.resume().then(function () { restartMusic(); updateSoundButtons(); }).catch(updateSoundButtons);
+  } else { restartMusic(); updateSoundButtons(); }
 }
 
 function tone(frequency, duration, offset, type, volume, endFrequency) {
@@ -55,15 +73,70 @@ function noise(duration, volume) {
   source.connect(gain); gain.connect(audio.master); source.start();
 }
 
-function startAmbient() {
-  if (!audio.started || audio.ambient) return;
-  audio.ambient = true;
-  [43, 64].forEach(function (frequency, index) {
-    const oscillator = audio.context.createOscillator();
-    const gain = audio.context.createGain();
-    oscillator.type = index ? 'sine' : 'triangle'; oscillator.frequency.value = frequency;
-    gain.gain.value = index ? 0.025 : 0.018;
-    oscillator.connect(gain); gain.connect(audio.master); oscillator.start();
+function musicTone(frequency, type, volume, sustain) {
+  if (!audio.started || audio.muted || !audio.musicGain) return;
+  const now = audio.context.currentTime;
+  const oscillator = audio.context.createOscillator();
+  const gain = audio.context.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(volume, now + 0.04);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + sustain);
+  oscillator.connect(gain); gain.connect(audio.musicGain);
+  oscillator.start(now); oscillator.stop(now + sustain + 0.03);
+}
+
+function musicKick(volume) {
+  if (!audio.started || audio.muted || !audio.musicGain) return;
+  const now = audio.context.currentTime;
+  const oscillator = audio.context.createOscillator();
+  const gain = audio.context.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(105, now);
+  oscillator.frequency.exponentialRampToValueAtTime(42, now + 0.16);
+  gain.gain.setValueAtTime(volume, now);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+  oscillator.connect(gain); gain.connect(audio.musicGain);
+  oscillator.start(now); oscillator.stop(now + 0.2);
+}
+
+function restartMusic() {
+  if (audio.musicTimer) clearInterval(audio.musicTimer);
+  audio.musicTimer = null;
+  audio.musicMode = audio.desiredMusicMode;
+  audio.musicStep = 0;
+  const track = MUSIC_TRACKS[audio.musicMode];
+  if (!audio.started || !track || audio.context.state !== 'running') return;
+  function pulse() {
+    const note = track.notes[audio.musicStep % track.notes.length];
+    musicTone(note, track.type, track.volume, track.sustain);
+    if (audio.musicStep % 2 === 0) {
+      const bass = track.bass[Math.floor(audio.musicStep / 4) % track.bass.length];
+      musicTone(bass, 'sine', track.volume * 0.82, Math.min(0.7, track.sustain * 1.7));
+      musicKick(track.volume * 0.7);
+    }
+    if (audio.musicStep % 4 === 0) musicTone(note * 1.5, 'sine', track.volume * 0.38, track.sustain * 1.8);
+    audio.musicStep += 1;
+  }
+  pulse();
+  audio.musicTimer = setInterval(pulse, track.interval);
+}
+
+function setMusicMode(mode) {
+  if (audio.desiredMusicMode === mode) return;
+  audio.desiredMusicMode = mode;
+  if (audio.started && audio.context.state === 'running') restartMusic();
+}
+
+function updateSoundButtons() {
+  const running = audio.started && audio.context && audio.context.state === 'running';
+  const label = audio.muted ? 'SOUND OFF' : (running ? 'MUSIC ON' : (audio.started ? 'RESUME MUSIC' : 'START MUSIC'));
+  ['#home-sound-toggle', '#sound-toggle', '#lobby-sound-toggle'].forEach(function (selector) {
+    const button = $(selector);
+    if (!button) return;
+    button.textContent = label;
+    button.classList.toggle('is-playing', running && !audio.muted);
   });
 }
 
@@ -97,6 +170,62 @@ async function api(path, body, token) {
   return data;
 }
 
+async function getJson(path) {
+  const response = await fetch(path, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Request failed.');
+  return data;
+}
+
+function renderOpenRooms(rooms) {
+  const list = $('#open-rooms');
+  list.innerHTML = '';
+  if (!rooms.length) {
+    const empty = document.createElement('p');
+    empty.textContent = '현재 입장 가능한 방이 없습니다. 새 방을 만들어 보세요.';
+    list.appendChild(empty);
+    return;
+  }
+  rooms.forEach(function (room) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'open-room';
+    button.dataset.roomCode = room.code;
+    const info = document.createElement('span');
+    const title = document.createElement('strong');
+    const detail = document.createElement('span');
+    const enter = document.createElement('b');
+    title.textContent = room.hostName + '님의 방';
+    detail.textContent = room.players + ' / ' + room.targetPlayers + '명 · 임포스터 ' + room.impostors + '명';
+    enter.textContent = '입장';
+    info.appendChild(title); info.appendChild(detail);
+    button.appendChild(info); button.appendChild(enter);
+    list.appendChild(button);
+  });
+}
+
+async function refreshOpenRooms() {
+  if ($('#home').classList.contains('hidden')) return;
+  try {
+    const result = await getJson('/api/rooms/open');
+    renderOpenRooms(result.rooms || []);
+  } catch (error) {
+    $('#open-rooms').innerHTML = '<p>방 목록을 불러오지 못했습니다.</p>';
+  }
+}
+
+async function joinOpenRoom(code) {
+  if (state.joiningRoom) return;
+  state.joiningRoom = true;
+  try {
+    enter(await api('/api/rooms/join', { code: code, nickname: $('#nickname').value, color: state.color }));
+  } catch (error) {
+    errorAt('#home-error', error.message);
+    state.joiningRoom = false;
+    refreshOpenRooms();
+  }
+}
+
 function enter(result) {
   state.token = result.token;
   state.playerId = result.playerId;
@@ -119,6 +248,8 @@ function render(room) {
     document.activeElement.blur();
   }
   state.room = room;
+  setMusicMode(room.phase === 'LOBBY' ? 'lobby' : (room.phase === 'MEETING' ? 'meeting'
+    : (room.phase === 'PLAYING' ? 'play' : null)));
   if (room.phase !== 'PLAYING') state.keys.clear();
   if (previousRoom) {
     if (room.phase === 'MEETING' && (!previousRoom.meeting || previousRoom.meeting.id !== room.meeting.id)) {
@@ -241,6 +372,7 @@ async function submitVote(targetId) {
 
 function renderLobby(room) {
   show('lobby');
+  updateSoundButtons();
   sessionStorage.removeItem('role-seen-' + room.code);
   const me = room.players.find(function (p) { return p.id === state.playerId; });
   const isHost = room.hostId === state.playerId;
@@ -304,12 +436,13 @@ function renderGame(room) {
     node.style.left = ((x - left) * scale) + 'px';
     node.style.top = ((y - top) * scale) + 'px';
   };
-  $('#role').textContent = (room.selfRole === 'CREW' ? (room.selfCrewRole || 'CREWMATE')
-    : (room.selfImpostorRole || room.selfRole || 'CREW')) +
-    (room.selfAlive ? ' / ALIVE' : ' / ELIMINATED');
+  $('#role').textContent = room.selfIsGhost ? 'CREW GHOST / TASKS REMAIN'
+    : ((room.selfRole === 'CREW' ? (room.selfCrewRole || 'CREWMATE')
+      : (room.selfImpostorRole || room.selfRole || 'CREW')) +
+      (room.selfAlive ? ' / ALIVE' : ' / ELIMINATED'));
   $('#role').className = room.selfRole === 'IMPOSTOR' ? 'impostor-role' : 'crew-role';
   $('#game-code').textContent = room.code;
-  $('#sound-toggle').textContent = audio.muted ? 'SOUND OFF' : 'SOUND ON';
+  updateSoundButtons();
   $('#task-progress').style.width = Math.round(room.taskProgress * 100) + '%';
   $('#task-count').textContent = room.tasksCompleted + ' / ' + room.totalTasks;
   $('#personal-tasks').textContent = me ? me.tasksDone + ' / ' + me.taskGoal + ' TASKS' : '';
@@ -398,7 +531,7 @@ function renderGame(room) {
   $('#spirit-warning').classList.toggle('hidden', room.phase !== 'PLAYING' || !(room.spiritAnnouncementRemaining > 0));
   const visiblePlayerIds = new Set();
   room.players.forEach(function (player) {
-    if (!player.alive || !visible(player.x, player.y, 300)) return;
+    if ((!player.alive && !player.isGhost) || !visible(player.x, player.y, 300)) return;
     visiblePlayerIds.add(player.id);
     let actor = $('#players-layer').querySelector('[data-player-id="' + player.id + '"]');
     if (!actor) {
@@ -409,9 +542,11 @@ function renderGame(room) {
     }
     actor.className = 'actor facing-' + (player.facing || 'down') + ' ' + player.color +
       (player.isBot ? ' bot' : '') + (player.moving ? ' moving' : '') +
-      (player.isPhantomActive ? ' phantom-active' : '') + (player.isImpostorAlly ? ' impostor-ally' : '');
+      (player.isGhost ? ' ghost' : '') + (player.isPhantomActive ? ' phantom-active' : '') +
+      (player.isImpostorAlly ? ' impostor-ally' : '');
     place(actor, player.x, player.y);
-    actor.querySelector('span').textContent = player.nickname + (player.isBot ? ' [CPU]' : '');
+    actor.querySelector('span').textContent = player.nickname + (player.isBot ? ' [CPU]' : '') +
+      (player.isGhost ? ' [GHOST]' : '');
   });
   Array.from($('#players-layer').children).forEach(function (actor) {
     if (!visiblePlayerIds.has(actor.dataset.playerId)) actor.remove();
@@ -480,14 +615,19 @@ function renderGame(room) {
   revealRole(room);
   $('#map').style.setProperty('--vision-size', Math.max(500, room.visionRadius * scale * 2) + 'px');
   if (room.phase === 'ENDED') {
-    $('#result').classList.remove('hidden');
-    $('#result-title').textContent = room.winner + ' VICTORY';
+    const resultPanel = $('#result');
+    const impostorVictory = room.winner === 'IMPOSTOR';
+    resultPanel.classList.remove('hidden');
+    resultPanel.classList.toggle('impostor-victory', impostorVictory);
+    resultPanel.classList.toggle('crew-victory', !impostorVictory);
+    $('#result-title').textContent = impostorVictory ? 'IMPOSTOR VICTORY' : 'CREW VICTORY';
     $('#result-message').textContent = room.message;
     const isHost = room.hostId === state.playerId;
     $('#rematch').classList.toggle('hidden', !isHost);
     $('#rematch-status').textContent = isHost ? 'Return everyone to the lobby for another round.' : 'Waiting for the host to start another round.';
   } else {
     $('#result').classList.add('hidden');
+    $('#result').classList.remove('impostor-victory', 'crew-victory');
   }
 }
 
@@ -729,7 +869,8 @@ function updateAttackButton(room, me) {
   $('#attack').classList.toggle('hidden', room.selfRole !== 'IMPOSTOR');
   $('#attack').disabled = !nearest || nearestDistance > 650 || room.killCooldown > 0 || room.phase !== 'PLAYING' || !room.selfAlive;
   $('#attack').dataset.targetId = nearest ? nearest.id : '';
-  $('#attack').textContent = room.killCooldown > 0 ? 'ELIMINATE ' + Math.ceil(room.killCooldown) : 'ELIMINATE';
+  $('#attack').textContent = room.killCooldown > 0 ? 'ELIMINATE ' + Math.ceil(room.killCooldown) : 'ELIMINATE [SPACE]';
+  $('#attack').title = 'Keyboard shortcut: Space';
 }
 
 function updateDoorButtons(room, me) {
@@ -752,7 +893,7 @@ function updateDoorButtons(room, me) {
 function updateTaskButton(room, me) {
   let nearest = null;
   let nearestDistance = Infinity;
-  if (me && me.alive && room.selfRole === 'CREW' && me.tasksDone < me.taskGoal) {
+  if (me && (me.alive || me.isGhost) && room.selfRole === 'CREW' && me.tasksDone < me.taskGoal) {
     room.tasks.forEach(function (task) {
       if (room.selfCompletedTaskIds.indexOf(task.id) >= 0) return;
       const d = Math.hypot(me.x - task.x, me.y - task.y);
@@ -789,10 +930,13 @@ $('#create').addEventListener('click', async function () {
   try { enter(await api('/api/rooms', { nickname: $('#nickname').value, color: state.color })); }
   catch (e) { errorAt('#home-error', e.message); }
 });
-$('#join').addEventListener('click', async function () {
-  try { enter(await api('/api/rooms/join', { code: normalizeRoomCode($('#room-code').value), nickname: $('#nickname').value, color: state.color })); }
-  catch (e) { errorAt('#home-error', e.message); }
+$('#open-rooms').addEventListener('pointerdown', function (event) {
+  const roomButton = event.target.closest('[data-room-code]');
+  if (!roomButton) return;
+  event.preventDefault();
+  joinOpenRoom(roomButton.dataset.roomCode);
 });
+$('#refresh-rooms').addEventListener('click', refreshOpenRooms);
 $('#ready').addEventListener('click', async function () {
   const me = state.room.players.find(function (p) { return p.id === state.playerId; });
   try { await api('/api/ready', { ready: !me.ready }, state.token); } catch (e) { errorAt('#lobby-error', e.message); }
@@ -840,14 +984,6 @@ async function leaveRoom() {
 $('#leave').addEventListener('click', leaveRoom);
 $('#game-leave').addEventListener('click', leaveRoom);
 $('#meeting-leave').addEventListener('click', leaveRoom);
-$('#room-code').addEventListener('input', function (event) {
-  if (!event.isComposing) event.target.value = normalizeRoomCode(event.target.value);
-});
-$('#room-code').addEventListener('compositionend', function (event) { event.target.value = normalizeRoomCode(event.target.value); });
-$('#room-code').addEventListener('paste', function (event) {
-  event.preventDefault();
-  event.target.value = normalizeRoomCode(event.clipboardData.getData('text'));
-});
 $('#do-task').addEventListener('click', async function () {
   try { await api('/api/task', { taskId: $('#do-task').dataset.taskId }, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
@@ -923,15 +1059,24 @@ $('#meeting-roster').addEventListener('keydown', function (event) {
   submitVote(button.dataset.voteTarget);
 });
 $('#vote-skip').addEventListener('pointerdown', function (event) { event.preventDefault(); submitVote(null); });
-$('#attack').addEventListener('click', async function () {
+async function eliminateNearest() {
+  const button = $('#attack');
+  if (button.disabled || !button.dataset.targetId || !state.room || state.room.phase !== 'PLAYING') return;
   try { await api('/api/eliminate', { targetId: $('#attack').dataset.targetId }, state.token); }
   catch (e) { errorAt('#game-error', e.message); }
-});
-$('#role-reveal-close').addEventListener('click', function () {
-  if (state.room && state.room.selfRole) sessionStorage.setItem('role-seen-' + state.room.code,
-    state.room.selfRole === 'CREW' ? state.room.selfRole + ':' + state.room.selfCrewRole
-      : state.room.selfRole + ':' + state.room.selfImpostorRole);
-  $('#role-reveal').classList.add('hidden');
+}
+$('#attack').addEventListener('click', eliminateNearest);
+$('#role-reveal-close').addEventListener('click', async function () {
+  const button = $('#role-reveal-close');
+  button.disabled = true;
+  try {
+    await api('/api/intro/ready', {}, state.token);
+    if (state.room && state.room.selfRole) sessionStorage.setItem('role-seen-' + state.room.code,
+      state.room.selfRole === 'CREW' ? state.room.selfRole + ':' + state.room.selfCrewRole
+        : state.room.selfRole + ':' + state.room.selfImpostorRole);
+    $('#role-reveal').classList.add('hidden');
+  } catch (e) { errorAt('#game-error', e.message); }
+  button.disabled = false;
 });
 $('#rematch').addEventListener('click', async function () {
   try {
@@ -940,17 +1085,49 @@ $('#rematch').addEventListener('click', async function () {
   } catch (e) { errorAt('#game-error', e.message); }
 });
 $('#result-leave').addEventListener('click', leaveRoom);
-$('#sound-toggle').addEventListener('click', function () {
-  ensureAudio();
+function toggleSound() {
+  if (!audio.started) {
+    audio.muted = false;
+    localStorage.setItem('station-muted', 'false');
+    ensureAudio();
+    if (audio.context) {
+      audio.context.resume().then(function () {
+        restartMusic();
+        playSound('start');
+        updateSoundButtons();
+      }).catch(updateSoundButtons);
+    }
+    updateSoundButtons();
+    return;
+  }
+  if (audio.context && audio.context.state !== 'running') {
+    audio.muted = false;
+    localStorage.setItem('station-muted', 'false');
+    audio.context.resume().then(function () {
+      audio.master.gain.setTargetAtTime(0.82, audio.context.currentTime, 0.04);
+      restartMusic();
+      playSound('start');
+      updateSoundButtons();
+    }).catch(updateSoundButtons);
+    return;
+  }
   audio.muted = !audio.muted;
   localStorage.setItem('station-muted', String(audio.muted));
-  if (audio.master) audio.master.gain.setTargetAtTime(audio.muted ? 0 : 0.7, audio.context.currentTime, 0.04);
-  $('#sound-toggle').textContent = audio.muted ? 'SOUND OFF' : 'SOUND ON';
-  if (!audio.muted) playSound('start');
-});
+  if (audio.master) audio.master.gain.setTargetAtTime(audio.muted ? 0 : 0.82, audio.context.currentTime, 0.04);
+  updateSoundButtons();
+  if (!audio.muted) { restartMusic(); playSound('start'); }
+}
+$('#home-sound-toggle').addEventListener('click', toggleSound);
+$('#sound-toggle').addEventListener('click', toggleSound);
+$('#lobby-sound-toggle').addEventListener('click', toggleSound);
 
-document.addEventListener('pointerdown', ensureAudio, { once: true, capture: true });
-document.addEventListener('keydown', ensureAudio, { once: true, capture: true });
+document.addEventListener('pointerdown', function (event) {
+  if (!event.target.closest('.sound-toggle')) ensureAudio();
+}, { capture: true });
+document.addEventListener('keydown', function (event) {
+  if (!event.target.closest || !event.target.closest('.sound-toggle')) ensureAudio();
+}, { capture: true });
+updateSoundButtons();
 
 function isTypingTarget(target) {
   return Boolean(target && (target.matches('input, textarea, select') || target.isContentEditable));
@@ -965,6 +1142,18 @@ function movementKey(event) {
 }
 window.addEventListener('keydown', function (event) {
   if (isTypingTarget(event.target)) { clearMovementInput(); return; }
+  if (event.code === 'Space') {
+    if (event.target && event.target.closest && event.target.closest('button')) return;
+    event.preventDefault();
+    clearMovementInput();
+    const overlayOpen = !$('#role-reveal').classList.contains('hidden') ||
+      !$('#meeting').classList.contains('hidden') || !$('#ejection').classList.contains('hidden') ||
+      !$('#result').classList.contains('hidden');
+    if (!event.repeat && !overlayOpen && state.room && state.room.selfRole === 'IMPOSTOR' && state.room.selfAlive) {
+      eliminateNearest();
+    }
+    return;
+  }
   const key = movementKey(event);
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].indexOf(key) >= 0) {
     event.preventDefault(); state.keys.add(key);
@@ -993,3 +1182,6 @@ setInterval(async function () {
   try { await api('/api/move', { dx: dx, dy: dy }, state.token); } catch (e) {}
   state.moving = false;
 }, 100);
+
+refreshOpenRooms();
+setInterval(refreshOpenRooms, 2000);

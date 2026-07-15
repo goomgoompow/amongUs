@@ -72,6 +72,7 @@ const server = http.createServer(async function (req, res) {
   try {
     if (req.method === 'GET' && serveStatic(res, pathname)) return;
     if (req.method === 'GET' && pathname === '/api/health') return sendJson(res, 200, { ok: true });
+    if (req.method === 'GET' && pathname === '/api/rooms/open') return sendJson(res, 200, { rooms: store.listOpenRooms() });
 
     if (req.method === 'GET' && pathname === '/api/events') {
       const token = sessionToken(req, requestUrl);
@@ -113,6 +114,11 @@ const server = http.createServer(async function (req, res) {
     }
     if (req.method === 'POST' && pathname === '/api/start') {
       result = store.start(token);
+      publishForToken(token);
+      return sendJson(res, 200, { room: result });
+    }
+    if (req.method === 'POST' && pathname === '/api/intro/ready') {
+      result = store.acknowledgeIntro(token);
       publishForToken(token);
       return sendJson(res, 200, { room: result });
     }

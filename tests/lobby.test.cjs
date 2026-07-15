@@ -21,9 +21,20 @@ function ensureHumanRole(store, token, role, protectedIds) {
   return player;
 }
 
+function startGame(store, token) {
+  const result = store.start(token);
+  const room = store.byToken(token).room;
+  Array.from(room.players.values()).filter(function (player) { return !player.isBot; }).forEach(function (player) {
+    store.acknowledgeIntro(player.token);
+  });
+  return result;
+}
+
 const store = new LobbyStore();
 const host = store.create({ nickname: 'Nova', color: 'sky' });
 assert.strictEqual(host.room.settings.targetPlayers, 4);
+assert.strictEqual(store.listOpenRooms().length, 1);
+assert.strictEqual(store.listOpenRooms()[0].hostName, 'Nova', 'New lobby rooms appear in the public room browser');
 assert.strictEqual(host.room.settings.revealImpostors, true, 'Impostor identification is enabled by default');
 assert.strictEqual(host.room.canStart, true);
 
@@ -32,14 +43,28 @@ assert.strictEqual(configured.settings.impostors, 1, 'Four-player games allow on
 
 const formattedCode = host.room.code.slice(0, 3).toLowerCase() + '-' + host.room.code.slice(3).toLowerCase();
 const guest = store.join({ code: formattedCode, nickname: 'Mira', color: 'mint' });
+assert.strictEqual(store.listOpenRooms()[0].players, 2, 'Open room player counts update after joining');
 store.setReady(guest.token, true);
-const started = store.start(host.token);
+const started = startGame(store, host.token);
+assert.strictEqual(store.listOpenRooms().length, 0, 'Rooms disappear from the browser after the game starts');
 assert.strictEqual(started.phase, 'PLAYING');
 assert.strictEqual(started.players.length, 4, 'Bots fill missing seats');
 assert.strictEqual(started.players.filter(function (p) { return p.isBot; }).length, 2);
 assert.strictEqual(started.selfRole === 'CREW' || started.selfRole === 'IMPOSTOR', true);
 assert.strictEqual(gameCore.isWalkable(15000, 8000), true, 'Command hub is walkable');
 assert.strictEqual(gameCore.isWalkable(50, 50), false, 'Empty space outside rooms is blocked');
+const speedTestRoom = store.byToken(host.token).room;
+const crewSpeedBot = { role: 'CREW', x: 14500, y: 8000, botPath: [], stuckFor: 0 };
+store._moveBotToward(speedTestRoom, crewSpeedBot, { x: 16000, y: 8000 }, 'command', 1);
+assert.strictEqual(Math.round(crewSpeedBot.x - 14500), 1000,
+  'Bot crew movement is eighty percent of nominal player speed');
+const youngSpirit = { x: 0, y: 0, spawnedAt: 100 };
+const olderSpirit = { x: 0, y: 0, spawnedAt: 100 };
+store._moveSpiritToward(youngSpirit, { x: 10000, y: 0 }, 1, 109.9);
+store._moveSpiritToward(olderSpirit, { x: 10000, y: 0 }, 1, 120);
+assert.strictEqual(Math.round(youngSpirit.x), 700);
+assert.strictEqual(Math.round(olderSpirit.x), 770,
+  'Vengeful spirits gain five percent speed for every ten seconds alive');
 const startedRoom = store.byToken(host.token).room;
 assert.strictEqual(Array.from(startedRoom.players.values()).filter(function (player) {
   return player.role === 'IMPOSTOR';
@@ -159,7 +184,7 @@ const activeLeaveStore = new LobbyStore();
 const activeLeaveHost = activeLeaveStore.create({ nickname: 'ActiveHost', color: 'teal' });
 const activeLeaveGuest = activeLeaveStore.join({ code: activeLeaveHost.room.code, nickname: 'ActiveGuest', color: 'orange' });
 activeLeaveStore.setReady(activeLeaveGuest.token, true);
-activeLeaveStore.start(activeLeaveHost.token);
+startGame(activeLeaveStore, activeLeaveHost.token);
 const activeCrewToken = [activeLeaveHost.token, activeLeaveGuest.token].find(function (token) {
   return activeLeaveStore.byToken(token).player.role === 'CREW';
 });
@@ -172,7 +197,7 @@ assert.strictEqual(roomAfterActiveLeave.taskGoal, expectedTaskGoal,
 
 const combatStore = new LobbyStore();
 const loneImpostor = combatStore.create({ nickname: 'Hunter', color: 'coral' });
-combatStore.start(loneImpostor.token);
+startGame(combatStore, loneImpostor.token);
 ensureHumanRole(combatStore, loneImpostor.token, 'IMPOSTOR');
 const combatRoom = combatStore.byToken(loneImpostor.token).room;
 const attacker = combatStore.byToken(loneImpostor.token).player;
@@ -190,9 +215,49 @@ combatStore.eliminate(loneImpostor.token, victims[1].id);
 assert.strictEqual(combatStore.viewForToken(loneImpostor.token).phase, 'ENDED');
 assert.strictEqual(combatStore.viewForToken(loneImpostor.token).winner, 'IMPOSTOR');
 
+const ghostStore = new LobbyStore();
+const ghostKillerSession = ghostStore.create({ nickname: 'GhostKiller', color: 'red' });
+const ghostCrewSession = ghostStore.join({ code: ghostKillerSession.room.code, nickname: 'FutureGhost', color: 'sky' });
+ghostStore.setReady(ghostCrewSession.token, true);
+startGame(ghostStore, ghostKillerSession.token);
+ensureHumanRole(ghostStore, ghostKillerSession.token, 'IMPOSTOR');
+ensureHumanRole(ghostStore, ghostCrewSession.token, 'CREW');
+const ghostRoom = ghostStore.byToken(ghostKillerSession.token).room;
+const ghostKiller = ghostStore.byToken(ghostKillerSession.token).player;
+const crewGhost = ghostStore.byToken(ghostCrewSession.token).player;
+ghostRoom.gameTime = ghostKiller.killReadyAt;
+Object.assign(crewGhost, { x: ghostKiller.x + 100, y: ghostKiller.y });
+const goalBeforeGhost = ghostRoom.taskGoal;
+ghostStore.eliminate(ghostKillerSession.token, crewGhost.id);
+assert.strictEqual(crewGhost.alive, false);
+assert.strictEqual(crewGhost.isGhost, true, 'A murdered human crew member becomes a playable ghost');
+assert.strictEqual(ghostRoom.taskGoal, goalBeforeGhost, 'A crew ghost keeps their remaining tasks in the shared goal');
+const ghostView = ghostStore.viewForToken(ghostCrewSession.token);
+assert.strictEqual(ghostView.selfIsGhost, true);
+assert.strictEqual(ghostView.players.find(function (player) { return player.id === ghostKiller.id; }).isImpostorAlly, true,
+  'A crew ghost can identify impostors');
+assert.strictEqual(ghostStore.viewForToken(ghostKillerSession.token).players.some(function (player) {
+  return player.id === crewGhost.id;
+}), false, 'Living players cannot see crew ghosts');
+Object.assign(crewGhost, { x: 12400, y: 6200 });
+ghostStore.move(ghostCrewSession.token, { dx: -1, dy: 0 });
+assert.strictEqual(crewGhost.x, 12275, 'Crew ghosts can move through walls');
+const ghostTask = gameCore.TASKS.find(function (task) { return crewGhost.assignedTaskIds.has(task.id); });
+Object.assign(crewGhost, { x: ghostTask.x, y: ghostTask.y });
+const ghostTasksBefore = crewGhost.tasksDone;
+ghostStore.completeTask(ghostCrewSession.token, ghostTask.id);
+ghostStore.tick(5.1);
+assert.strictEqual(crewGhost.tasksDone, ghostTasksBefore + 1, 'Crew ghosts can complete their assigned tasks');
+assert.throws(function () { ghostStore.callEmergencyMeeting(ghostCrewSession.token); }, /Only living players/,
+  'Crew ghosts cannot call emergency meetings');
+Object.assign(ghostKiller, { x: ghostRoom.bodies[0].x, y: ghostRoom.bodies[0].y });
+ghostStore.reportBody(ghostKillerSession.token, ghostRoom.bodies[0].id);
+assert.throws(function () { ghostStore.voteMeeting(ghostCrewSession.token, ghostKiller.id); }, /Only living human players/,
+  'Crew ghosts cannot vote');
+
 const reportStore = new LobbyStore();
 const reporterSession = reportStore.create({ nickname: 'Reporter', color: 'rose' });
-reportStore.start(reporterSession.token);
+startGame(reportStore, reporterSession.token);
 ensureHumanRole(reportStore, reporterSession.token, 'IMPOSTOR');
 const reportRoom = reportStore.byToken(reporterSession.token).room;
 const reporter = reportStore.byToken(reporterSession.token).player;
@@ -210,10 +275,20 @@ const eyewitnesses = Array.from(reportRoom.players.values()).filter(function (pl
   return player.isBot && player.alive && player.suspectedImpostorId === reporter.id;
 });
 assert(eyewitnesses.length > 0, 'Bots in sight remember the killer');
+const olderBody = {
+  id: 'older-body-test', playerId: 'older-victim-test', nickname: 'Older victim', color: 'gray',
+  x: reporter.x, y: reporter.y, meltAt: null
+};
+reportRoom.bodies.push(olderBody);
+reportObservers[0].pendingReportBodyId = olderBody.id;
+reportObservers[0].reportReadyAt = reportRoom.gameTime + 1;
 reportStore.reportBody(reporterSession.token, reportBody.id);
 assert.strictEqual(reportStore.viewForToken(reporterSession.token).phase, 'MEETING');
 assert.strictEqual(reportStore.viewForToken(reporterSession.token).meeting.type, 'BODY_REPORT');
-assert.strictEqual(reportRoom.bodies.length, 0, 'Reported body is removed from the map');
+assert.strictEqual(reportRoom.bodies.length, 0, 'A meeting clears every body from the previous play period');
+assert(Array.from(reportRoom.players.values()).every(function (player) {
+  return !player.pendingReportBodyId && player.reportReadyAt === 0;
+}), 'A meeting clears every pending bot report so an old body cannot be reported again');
 assert(Object.values(reportRoom.meeting.botPlans).some(function (plan) {
   return plan.suspectId === reporter.id && plan.participate;
 }), 'Eyewitness bots plan to vote for the killer');
@@ -236,7 +311,7 @@ assert.strictEqual(reportStore.viewForToken(reporterSession.token).phase, 'PLAYI
 
 const crowdStore = new LobbyStore();
 const crowdKillerSession = crowdStore.create({ nickname: 'CrowdedKiller', color: 'brown' });
-crowdStore.start(crowdKillerSession.token);
+startGame(crowdStore, crowdKillerSession.token);
 ensureHumanRole(crowdStore, crowdKillerSession.token, 'IMPOSTOR');
 const crowdRoom = crowdStore.byToken(crowdKillerSession.token).room;
 const crowdKiller = crowdStore.byToken(crowdKillerSession.token).player;
@@ -255,7 +330,7 @@ assert.strictEqual(crowdWitnesses.every(function (witness) {
 
 const autoReportStore = new LobbyStore();
 const autoKiller = autoReportStore.create({ nickname: 'SeenKiller', color: 'maroon' });
-autoReportStore.start(autoKiller.token);
+startGame(autoReportStore, autoKiller.token);
 ensureHumanRole(autoReportStore, autoKiller.token, 'IMPOSTOR');
 const autoRoom = autoReportStore.byToken(autoKiller.token).room;
 const autoAttacker = autoReportStore.byToken(autoKiller.token).player;
@@ -282,7 +357,7 @@ assert(Object.values(autoRoom.meeting.votes).includes(autoAttacker.id), 'An eyew
 
 const emergencyStore = new LobbyStore();
 const emergencySession = emergencyStore.create({ nickname: 'Captain', color: 'amber' });
-emergencyStore.start(emergencySession.token);
+startGame(emergencyStore, emergencySession.token);
 const emergencyRoom = emergencyStore.byToken(emergencySession.token).room;
 const emergencyCaller = emergencyStore.byToken(emergencySession.token).player;
 emergencyRoom.gameTime = 15;
@@ -300,7 +375,7 @@ assert.throws(function () { emergencyStore.callEmergencyMeeting(emergencySession
 
 const lowTurnoutStore = new LobbyStore();
 const lowTurnoutSession = lowTurnoutStore.create({ nickname: 'SoloVoter', color: 'white' });
-lowTurnoutStore.start(lowTurnoutSession.token);
+startGame(lowTurnoutStore, lowTurnoutSession.token);
 const lowTurnoutRoom = lowTurnoutStore.byToken(lowTurnoutSession.token).room;
 lowTurnoutRoom.gameTime = 15;
 Object.assign(lowTurnoutStore.byToken(lowTurnoutSession.token).player, { x: 15000, y: 8150 });
@@ -316,7 +391,7 @@ assert.strictEqual(lowTurnoutStore.viewForToken(lowTurnoutSession.token).meeting
 
 const ejectStore = new LobbyStore();
 const ejectSession = ejectStore.create({ nickname: 'LeadVoter', color: 'navy' });
-ejectStore.start(ejectSession.token);
+startGame(ejectStore, ejectSession.token);
 ensureHumanRole(ejectStore, ejectSession.token, 'IMPOSTOR');
 const ejectRoom = ejectStore.byToken(ejectSession.token).room;
 const ejectCaller = ejectStore.byToken(ejectSession.token).player;
@@ -341,7 +416,7 @@ assert.strictEqual(ejectStore.viewForToken(ejectSession.token).impostorsRemainin
 const thresholdStore = new LobbyStore();
 const thresholdHost = thresholdStore.create({ nickname: 'Threshold', color: 'gold' });
 thresholdStore.updateSettings(thresholdHost.token, { targetPlayers: 5, impostors: 1, autoFillBots: true, vengefulSpirits: true });
-thresholdStore.start(thresholdHost.token);
+startGame(thresholdStore, thresholdHost.token);
 const thresholdRoom = thresholdStore.byToken(thresholdHost.token).room;
 thresholdRoom.gameTime = 15;
 Object.assign(thresholdStore.byToken(thresholdHost.token).player, { x: 15000, y: 8150 });
@@ -360,12 +435,51 @@ const largeHost = largeStore.create({ nickname: 'BigHost', color: 'violet' });
 const largeSettings = largeStore.updateSettings(largeHost.token, { targetPlayers: 20, impostors: 4, autoFillBots: true });
 assert.strictEqual(largeSettings.settings.targetPlayers, 20);
 assert.strictEqual(largeSettings.settings.impostors, 4);
+largeStore.start(largeHost.token);
+const introRoom = largeStore.byToken(largeHost.token).room;
+const introBotImpostor = Array.from(introRoom.players.values()).find(function (player) {
+  return player.isBot && player.role === 'IMPOSTOR';
+});
+const introCrew = Array.from(introRoom.players.values()).find(function (player) { return player.role === 'CREW'; });
+Object.assign(introBotImpostor, { x: 15000, y: 8000, botStartDelay: 0 });
+Object.assign(introCrew, { x: 15100, y: 8000 });
+largeStore.tick(20);
+assert.strictEqual(introCrew.alive, true, 'Bot impostors cannot eliminate while humans are reading role cards');
+assert.strictEqual(introBotImpostor.phantomUntil, 0, 'Bot impostors cannot activate Phantom during role cards');
+assert.strictEqual(introBotImpostor.disguiseUntil, 0, 'Bot impostors cannot disguise during role cards');
+largeStore.acknowledgeIntro(largeHost.token);
+assert.strictEqual(introRoom.botActionsUnlocked, true);
+assert.strictEqual(introBotImpostor.killReadyAt - introRoom.gameTime, 7,
+  'Bot elimination cooldown starts after the role card closes');
+assert.strictEqual(introBotImpostor.phantomReadyAt - introRoom.gameTime, 15,
+  'Bot special ability cooldown starts after the role card closes');
+assert.strictEqual(introBotImpostor.disguiseReadyAt - introRoom.gameTime, 15);
+const roamingRooms = ['reactor', 'laboratory', 'cargo', 'navigation'].map(function (roomId) {
+  const room = gameCore.ROOMS.find(function (candidate) { return candidate.id === roomId; });
+  return { x: room.x + room.w / 2, y: room.y + room.h / 2 };
+});
+Array.from(introRoom.players.values()).filter(function (player) {
+  return player.alive && player.role === 'CREW';
+}).forEach(function (player, index) {
+  Object.assign(player, roamingRooms[index % roamingRooms.length]);
+});
+Object.assign(introBotImpostor, { x: 15000, y: 8000, botStartDelay: introRoom.gameTime,
+  killReadyAt: Infinity, phantomReadyAt: Infinity, disguiseReadyAt: Infinity,
+  huntTargetId: null, huntTargetUntil: 0, botPathRefreshAt: 0 });
+const impostorRoamStart = { x: introBotImpostor.x, y: introBotImpostor.y };
+largeStore.tick(0.1);
+assert(Math.hypot(introBotImpostor.x - impostorRoamStart.x, introBotImpostor.y - impostorRoamStart.y) > 0,
+  'Bot impostors leave the emergency room to roam toward crew targets');
+assert(introBotImpostor.huntTargetUntil - introRoom.gameTime > 5,
+  'Bot impostors keep a roaming target instead of switching every frame');
+assert(introBotImpostor.botPathRefreshAt - introRoom.gameTime > 3,
+  'Bot impostor routes are stable long enough to cross rooms');
 
 const hiddenAllyStore = new LobbyStore();
 const hiddenAllyHost = hiddenAllyStore.create({ nickname: 'HiddenAlly', color: 'black' });
 hiddenAllyStore.updateSettings(hiddenAllyHost.token, { targetPlayers: 4, impostors: 1, autoFillBots: true,
   revealImpostors: false });
-hiddenAllyStore.start(hiddenAllyHost.token);
+startGame(hiddenAllyStore, hiddenAllyHost.token);
 ensureHumanRole(hiddenAllyStore, hiddenAllyHost.token, 'IMPOSTOR');
 assert.strictEqual(hiddenAllyStore.viewForToken(hiddenAllyHost.token).players.some(function (player) {
   return player.isImpostorAlly;
@@ -379,7 +493,7 @@ const roleGuests = [
   roleStore.join({ code: roleHost.room.code, nickname: 'RoleThree', color: 'gold' })
 ];
 roleGuests.forEach(function (guestSession) { roleStore.setReady(guestSession.token, true); });
-roleStore.start(roleHost.token);
+startGame(roleStore, roleHost.token);
 const roleTokens = [roleHost.token].concat(roleGuests.map(function (guestSession) { return guestSession.token; }));
 const roleRoom = roleStore.byToken(roleHost.token).room;
 const roleCrewTokens = roleTokens.filter(function (token) { return roleStore.byToken(token).player.role === 'CREW'; });
@@ -429,7 +543,7 @@ const impostorRoleGuests = [
 impostorRoleGuests.forEach(function (session) { impostorRoleStore.setReady(session.token, true); });
 impostorRoleStore.updateSettings(impostorRoleHost.token, { targetPlayers: 11, impostors: 3, autoFillBots: true,
   vengefulSpirits: false, phantomDuration: 4, meltDelay: 5, disguiseDuration: 6, disguiseCooldown: 18 });
-impostorRoleStore.start(impostorRoleHost.token);
+startGame(impostorRoleStore, impostorRoleHost.token);
 const impostorRoleTokens = [impostorRoleHost.token].concat(impostorRoleGuests.map(function (session) { return session.token; }));
 const intendedImpostorIds = impostorRoleTokens.slice(0, 3).map(function (token) {
   return impostorRoleStore.byToken(token).player.id;
@@ -490,6 +604,7 @@ impostorRoleStore.tick(0.01);
 assert(impostorRoleRoom.meeting.messages.some(function (message) {
   return message.senderId === phantomSceneCrew[1].id && message.text === phantom.nickname + '이 은신에서 풀리는 걸 봤어.';
 }), 'Witness bot names the revealed Phantom in meeting chat');
+impostorRoleRoom.taskGoal = Math.max(impostorRoleRoom.taskGoal, impostorRoleRoom.tasksCompleted + 100);
 impostorRoleStore._finishMeeting(impostorRoleRoom);
 assert.strictEqual(Array.from(impostorRoleRoom.players.values()).filter(function (player) {
   return player.alive && player.role === 'IMPOSTOR';
@@ -536,7 +651,7 @@ assert.strictEqual(impostorRoleRoom.bodies.length, 0, 'A melted body can no long
 
 const disguiseReportStore = new LobbyStore();
 const disguiseReportHost = disguiseReportStore.create({ nickname: 'CaughtShifter', color: 'magenta' });
-disguiseReportStore.start(disguiseReportHost.token);
+startGame(disguiseReportStore, disguiseReportHost.token);
 ensureHumanRole(disguiseReportStore, disguiseReportHost.token, 'IMPOSTOR');
 const disguiseReportRoom = disguiseReportStore.byToken(disguiseReportHost.token).room;
 const caughtShifter = disguiseReportStore.byToken(disguiseReportHost.token).player;
@@ -567,7 +682,7 @@ const ventStore = new LobbyStore();
 const ventHost = ventStore.create({ nickname: 'VentHost', color: 'maroon' });
 const ventGuest = ventStore.join({ code: ventHost.room.code, nickname: 'VentGuest', color: 'cyan' });
 ventStore.setReady(ventGuest.token, true);
-ventStore.start(ventHost.token);
+startGame(ventStore, ventHost.token);
 ensureHumanRole(ventStore, ventHost.token, 'IMPOSTOR');
 ensureHumanRole(ventStore, ventGuest.token, 'CREW');
 const ventTokens = [ventHost.token, ventGuest.token];
@@ -591,7 +706,7 @@ assert.strictEqual(ventStore.viewForToken(ventCrewToken).vents.length, 0, 'Crew 
 const spiritStore = new LobbyStore();
 const spiritHost = spiritStore.create({ nickname: 'Haunted', color: 'black' });
 spiritStore.updateSettings(spiritHost.token, { targetPlayers: 7, impostors: 1, autoFillBots: true });
-spiritStore.start(spiritHost.token);
+startGame(spiritStore, spiritHost.token);
 ensureHumanRole(spiritStore, spiritHost.token, 'IMPOSTOR');
 const spiritRoom = spiritStore.byToken(spiritHost.token).room;
 const spiritImpostor = spiritStore.byToken(spiritHost.token).player;
@@ -634,7 +749,7 @@ assert.strictEqual(spiritRoom.spiritAnnouncementUntil, 0, 'Spirit warnings are c
 const noSpiritStore = new LobbyStore();
 const noSpiritHost = noSpiritStore.create({ nickname: 'NoGhosts', color: 'white' });
 noSpiritStore.updateSettings(noSpiritHost.token, { targetPlayers: 4, impostors: 1, autoFillBots: true, vengefulSpirits: false });
-noSpiritStore.start(noSpiritHost.token);
+startGame(noSpiritStore, noSpiritHost.token);
 ensureHumanRole(noSpiritStore, noSpiritHost.token, 'IMPOSTOR');
 const noSpiritRoom = noSpiritStore.byToken(noSpiritHost.token).room;
 const noSpiritKiller = noSpiritStore.byToken(noSpiritHost.token).player;
@@ -648,7 +763,7 @@ assert.strictEqual(noSpiritRoom.spiritReadyAt, Infinity, 'Disabling spirits prev
 const meetingSpiritStore = new LobbyStore();
 const meetingSpiritHost = meetingSpiritStore.create({ nickname: 'TimerReset', color: 'lavender' });
 meetingSpiritStore.updateSettings(meetingSpiritHost.token, { targetPlayers: 7, impostors: 1, autoFillBots: true, vengefulSpirits: true });
-meetingSpiritStore.start(meetingSpiritHost.token);
+startGame(meetingSpiritStore, meetingSpiritHost.token);
 ensureHumanRole(meetingSpiritStore, meetingSpiritHost.token, 'IMPOSTOR');
 const meetingSpiritRoom = meetingSpiritStore.byToken(meetingSpiritHost.token).room;
 const meetingSpiritKiller = meetingSpiritStore.byToken(meetingSpiritHost.token).player;
@@ -676,7 +791,7 @@ const missionStore = new LobbyStore();
 const missionHost = missionStore.create({ nickname: 'MissionHost', color: 'teal' });
 const missionGuest = missionStore.join({ code: missionHost.room.code, nickname: 'MissionGuest', color: 'orange' });
 missionStore.setReady(missionGuest.token, true);
-missionStore.start(missionHost.token);
+startGame(missionStore, missionHost.token);
 const missionTokens = [missionHost.token, missionGuest.token];
 const missionCrewToken = missionTokens.find(function (token) { return missionStore.byToken(token).player.role === 'CREW'; });
 const missionCrew = missionStore.byToken(missionCrewToken).player;

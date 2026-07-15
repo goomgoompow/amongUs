@@ -8,6 +8,11 @@ const BOT_NAMES = ['Atlas', 'Pico', 'Luna', 'Bolt', 'Echo', 'Mochi', 'Pixel', 'O
 const WORLD = { width: 30000, height: 20000 };
 const SPIRIT_DELAY = 30;
 const INITIAL_KILL_COOLDOWN = 7;
+const BOT_SPECIAL_INITIAL_COOLDOWN = 15;
+const PLAYER_NOMINAL_SPEED = 1250;
+const BOT_CREW_SPEED = PLAYER_NOMINAL_SPEED * 0.8;
+const BOT_IMPOSTOR_SPEED = 590;
+const SPIRIT_BASE_SPEED = 700;
 const CREW_ROLES = ['CREWMATE', 'ENGINEER', 'TRACKER', 'DETECTIVE'];
 const IMPOSTOR_ROLES = ['IMPOSTOR', 'PHANTOM', 'MELTER', 'SHAPESHIFTER'];
 const TASKS_PER_CREW = 4;
@@ -159,8 +164,7 @@ function roomPath(startId, goalId) {
 }
 function pathWaypoints(start, targetRoomId) {
   const ids = roomPath(roomAt(start.x, start.y), targetRoomId);
-  const startCenter = roomCenter(ids[0]);
-  const points = [{ x: startCenter.x, y: startCenter.y }];
+  const points = [];
   ids.slice(1).forEach(function (roomId, index) {
     const previousId = ids[index];
     const next = roomCenter(roomId);
@@ -187,30 +191,32 @@ function normalizeRoomCode(value) {
 
 function roomView(room, viewerId) {
   const viewer = room.players.get(viewerId);
+  const viewerIsGhost = Boolean(viewer && viewer.isGhost);
   const allPlayers = Array.from(room.players.values());
   const visiblePlayers = room.phase === 'PLAYING' && viewer
     ? allPlayers.filter(function (p) {
+      if (p.isGhost) return viewerIsGhost;
       const hiddenPhantom = p.role === 'IMPOSTOR' && p.impostorRole === 'PHANTOM' && p.phantomUntil > room.gameTime &&
-        viewer.id !== p.id && viewer.role !== 'IMPOSTOR';
-      return !hiddenPhantom && (p.id === viewer.id || hasLineOfSight(viewer, p, room));
+        viewer.id !== p.id && viewer.role !== 'IMPOSTOR' && !viewerIsGhost;
+      return !hiddenPhantom && (viewerIsGhost || p.id === viewer.id || hasLineOfSight(viewer, p, room));
     })
     : allPlayers;
   const players = visiblePlayers.map(function (p) {
     const disguiseTarget = p.role === 'IMPOSTOR' && p.impostorRole === 'SHAPESHIFTER' && p.disguiseUntil > room.gameTime
       ? room.players.get(p.disguiseTargetId) : null;
-    const concealDisguise = Boolean(disguiseTarget && viewer);
+    const concealDisguise = Boolean(disguiseTarget && viewer && !viewerIsGhost);
     return {
       id: p.id, nickname: concealDisguise ? disguiseTarget.nickname : p.nickname,
       color: concealDisguise ? disguiseTarget.color : p.color, ready: p.ready,
       connected: p.connected, isBot: p.isBot, x: p.x, y: p.y,
-      tasksDone: p.tasksDone, taskGoal: p.taskGoal, alive: p.alive,
+      tasksDone: p.tasksDone, taskGoal: p.taskGoal, alive: p.alive, isGhost: Boolean(p.isGhost),
       crewRole: p.id === viewerId && p.role === 'CREW' ? p.crewRole : null,
       isDisguised: Boolean(disguiseTarget && viewer && viewer.role === 'IMPOSTOR'),
       isPhantomActive: Boolean(p.role === 'IMPOSTOR' && p.impostorRole === 'PHANTOM' && p.phantomUntil > room.gameTime &&
         viewer && (viewer.id === p.id || viewer.role === 'IMPOSTOR')),
       facing: p.facing, moving: (p.movingUntil || 0) > (room.gameTime || 0),
       isImpostorAlly: Boolean(room.settings.revealImpostors !== false && viewer &&
-        viewer.role === 'IMPOSTOR' && p.role === 'IMPOSTOR')
+        viewer.role === 'IMPOSTOR' && p.role === 'IMPOSTOR') || Boolean(viewerIsGhost && p.role === 'IMPOSTOR')
     };
   });
   const humans = players.filter(function (p) { return !p.isBot; });
@@ -227,6 +233,7 @@ function roomView(room, viewerId) {
     selfCrewRole: room.phase !== 'LOBBY' && viewer && viewer.role === 'CREW' ? viewer.crewRole : null,
     selfImpostorRole: room.phase !== 'LOBBY' && viewer && viewer.role === 'IMPOSTOR' ? viewer.impostorRole : null,
     selfAlive: viewer ? viewer.alive !== false : false,
+    selfIsGhost: viewerIsGhost,
     selfCompletedTaskIds: viewer ? Array.from(viewer.completedTaskIds || []) : [],
     activeTask: viewer && viewer.activeTaskId ? {
       id: viewer.activeTaskId,
@@ -333,7 +340,7 @@ function roomView(room, viewerId) {
     impostorsRemaining: Array.from(room.players.values()).filter(function (player) {
       return player.alive && player.role === 'IMPOSTOR';
     }).length,
-    visionRadius: viewer && viewer.role === 'IMPOSTOR' ? 3600 : 2700,
+    visionRadius: viewerIsGhost ? 4200 : (viewer && viewer.role === 'IMPOSTOR' ? 3600 : 2700),
     sabotageCooldown: Math.max(0, (room.sabotageReadyAt || 0) - (room.gameTime || 0)),
     killCooldown: viewer && viewer.role === 'IMPOSTOR' ? Math.max(0, (viewer.killReadyAt || 0) - (room.gameTime || 0)) : 0,
     ventCooldown: viewer && viewer.role === 'IMPOSTOR' ? Math.max(0, (viewer.ventReadyAt || 0) - (room.gameTime || 0)) : 0
@@ -444,6 +451,7 @@ class LobbyStore {
     room.spiritTimerResetPending = false;
     room.meeting = null;
     room.traps = [];
+    room.botActionsUnlocked = false;
     let spawn = 0;
     room.players.forEach(function (p) {
       p.role = impostorIds.has(p.id) ? 'IMPOSTOR' : 'CREW';
@@ -456,11 +464,16 @@ class LobbyStore {
       p.completedTaskIds = new Set();
       p.assignedTaskIds = new Set();
       p.botTarget = null;
+      p.huntTargetId = null;
+      p.huntTargetUntil = 0;
+      p.huntTargetRoomId = null;
       p.botPathRefreshAt = 0;
       p.botWork = 0;
       p.alive = true;
+      p.isGhost = false;
+      p.introReady = p.isBot;
       p.killReadyAt = p.role === 'IMPOSTOR' ? room.gameTime + INITIAL_KILL_COOLDOWN : 0;
-      p.ventReadyAt = p.isBot && p.role === 'IMPOSTOR' ? room.gameTime + INITIAL_KILL_COOLDOWN : 0;
+      p.ventReadyAt = p.isBot && p.role === 'IMPOSTOR' ? Infinity : 0;
       p.facing = 'down';
       p.movingUntil = 0;
       p.emergencyMeetingsUsed = 0;
@@ -489,10 +502,10 @@ class LobbyStore {
       p.taskStartedAt = 0;
       p.nextTaskAt = 0;
       p.phantomUntil = 0;
-      p.phantomReadyAt = p.isBot && p.role === 'IMPOSTOR' ? room.gameTime + INITIAL_KILL_COOLDOWN : 0;
+      p.phantomReadyAt = p.isBot && p.role === 'IMPOSTOR' ? Infinity : 0;
       p.phantomReveal = null;
       p.disguiseUntil = 0;
-      p.disguiseReadyAt = p.isBot && p.role === 'IMPOSTOR' ? room.gameTime + INITIAL_KILL_COOLDOWN : 0;
+      p.disguiseReadyAt = p.isBot && p.role === 'IMPOSTOR' ? Infinity : 0;
       p.disguiseTargetId = null;
       spawn += 1;
     });
@@ -514,10 +527,20 @@ class LobbyStore {
     return roomView(room, found.player.id);
   }
 
+  acknowledgeIntro(token) {
+    const found = this.byToken(token);
+    const room = found.room;
+    if (room.phase !== 'PLAYING') return roomView(room, found.player.id);
+    found.player.introReady = true;
+    this._unlockBotActionsIfReady(room);
+    this._touch(room);
+    return roomView(room, found.player.id);
+  }
+
   move(token, input) {
     const found = this.byToken(token);
     if (found.room.phase !== 'PLAYING') return roomView(found.room, found.player.id);
-    if (!found.player.alive) throw new Error('Eliminated players cannot move.');
+    if (!found.player.alive && !found.player.isGhost) throw new Error('Eliminated players cannot move.');
     const dx = clamp(Number(input.dx) || 0, -1, 1);
     const dy = clamp(Number(input.dy) || 0, -1, 1);
     const length = Math.hypot(dx, dy) || 1;
@@ -526,8 +549,8 @@ class LobbyStore {
     if (Math.abs(dx) >= Math.abs(dy) && dx) found.player.facing = dx < 0 ? 'left' : 'right';
     else if (dy) found.player.facing = dy < 0 ? 'up' : 'down';
     if (dx || dy) found.player.movingUntil = found.room.gameTime + 0.24;
-    if (isWalkable(nextX, found.player.y, found.room)) found.player.x = nextX;
-    if (isWalkable(found.player.x, nextY, found.room)) found.player.y = nextY;
+    if (found.player.isGhost || isWalkable(nextX, found.player.y, found.room)) found.player.x = nextX;
+    if (found.player.isGhost || isWalkable(found.player.x, nextY, found.room)) found.player.y = nextY;
     this._touch(found.room);
     return roomView(found.room, found.player.id);
   }
@@ -536,7 +559,9 @@ class LobbyStore {
     const found = this.byToken(token);
     const player = found.player;
     const task = TASKS.find(function (t) { return t.id === taskId; });
-    if (found.room.phase !== 'PLAYING' || player.role !== 'CREW' || !player.alive) throw new Error('Living crew tasks only.');
+    if (found.room.phase !== 'PLAYING' || player.role !== 'CREW' || (!player.alive && !player.isGhost)) {
+      throw new Error('Crew and crew ghosts can perform tasks only during play.');
+    }
     if (!task || distance(player, task) > 520) throw new Error('Move closer to the task station.');
     if (!player.assignedTaskIds || !player.assignedTaskIds.has(task.id)) throw new Error('This task is assigned to another crew member.');
     if (found.room.completedTaskIds.has(task.id)) throw new Error('This task station is already complete.');
@@ -708,6 +733,7 @@ class LobbyStore {
       player.crewRole = null;
       player.impostorRole = null;
       player.alive = true;
+      player.isGhost = false;
       player.ready = false;
       player.tasksDone = 0;
       player.taskGoal = 0;
@@ -821,7 +847,12 @@ class LobbyStore {
 
   _beginMeeting(room, caller, type, reportedName) {
     room.phase = 'MEETING';
+    // A meeting closes every body report from the previous play period. This
+    // also prevents bots from reporting an older body after play resumes.
+    room.bodies = [];
     room.players.forEach(function (player) {
+      player.pendingReportBodyId = null;
+      player.reportReadyAt = 0;
       player.phantomUntil = 0;
       player.phantomReveal = null;
       player.disguiseUntil = 0;
@@ -904,7 +935,7 @@ class LobbyStore {
         }
       });
       room.players.forEach(function (player) {
-        if (!player.alive || player.role !== 'CREW') return;
+        if ((!player.alive && !player.isGhost) || player.role !== 'CREW') return;
         if (player.activeTaskId) {
           const activeTask = TASKS.find(function (task) { return task.id === player.activeTaskId; });
           if (!activeTask || distance(player, activeTask) > 520) {
@@ -931,11 +962,20 @@ class LobbyStore {
       room.players.forEach(function (bot) {
         if (room.phase !== 'PLAYING') return;
         if (!bot.isBot || !bot.alive) return;
+        if (!room.botActionsUnlocked) return;
         if (bot.role === 'IMPOSTOR') {
           const crewTargets = Array.from(room.players.values()).filter(function (player) {
             return player.alive && player.role === 'CREW';
           }).sort(function (a, b) { return distance(bot, a) - distance(bot, b); });
-          const target = crewTargets[0];
+          let target = room.players.get(bot.huntTargetId);
+          if (!target || !target.alive || target.role !== 'CREW' || room.gameTime >= (bot.huntTargetUntil || 0)) {
+            const roamingCandidates = crewTargets.slice(0, Math.min(4, crewTargets.length));
+            target = roamingCandidates.length ? roamingCandidates[crypto.randomInt(roamingCandidates.length)] : null;
+            bot.huntTargetId = target ? target.id : null;
+            bot.huntTargetUntil = room.gameTime + 6 + Math.random() * 5;
+            bot.huntTargetRoomId = null;
+            bot.botPathRefreshAt = 0;
+          }
           if (!target || room.gameTime < (bot.botStartDelay || 0)) return;
 
           if (bot.impostorRole === 'PHANTOM' && bot.phantomUntil <= room.gameTime &&
@@ -949,11 +989,11 @@ class LobbyStore {
             this._activateDisguise(room, bot, disguiseTarget);
           }
 
-          if (bot.botTarget !== target.id || !bot.botPath || !bot.botPath.length ||
-              room.gameTime >= (bot.botPathRefreshAt || 0)) {
-            bot.botTarget = target.id;
-            bot.botPath = pathWaypoints(bot, roomAt(target.x, target.y));
-            bot.botPathRefreshAt = room.gameTime + 1.25;
+          const targetRoomId = roomAt(target.x, target.y);
+          if (!bot.botPath || bot.huntTargetRoomId !== targetRoomId || room.gameTime >= (bot.botPathRefreshAt || 0)) {
+            bot.botPath = pathWaypoints(bot, targetRoomId);
+            bot.huntTargetRoomId = targetRoomId;
+            bot.botPathRefreshAt = room.gameTime + 3.5;
             bot.stuckFor = 0;
           }
           if (room.gameTime >= bot.killReadyAt && distance(bot, target) <= 650 &&
@@ -962,7 +1002,7 @@ class LobbyStore {
             dirty = true;
             return;
           }
-          this._moveBotToward(room, bot, target, roomAt(target.x, target.y), seconds);
+          this._moveBotToward(room, bot, target, targetRoomId, seconds);
           dirty = true;
           return;
         }
@@ -1030,7 +1070,7 @@ class LobbyStore {
         }
         if (room.gameTime < (bot.botStartDelay || 0)) return;
         if (bot.tasksDone < bot.taskGoal) {
-          if (!bot.botTarget || bot.completedTaskIds.has(bot.botTarget)) {
+          if (!bot.botTarget || bot.completedTaskIds.has(bot.botTarget) || !bot.assignedTaskIds.has(bot.botTarget)) {
             const available = TASKS.filter(function (task) {
               return bot.assignedTaskIds.has(task.id) && !bot.completedTaskIds.has(task.id) && !room.completedTaskIds.has(task.id);
             });
@@ -1070,7 +1110,7 @@ class LobbyStore {
           if (soul && hasLivingImpostor) {
             soul.used = true;
             room.spirits.push({ id: 'spirit-' + soul.playerId, playerId: soul.playerId, nickname: soul.nickname,
-              x: soul.x, y: soul.y, botPath: [], stuckFor: 0 });
+              x: soul.x, y: soul.y, spawnedAt: room.gameTime, botPath: [], stuckFor: 0 });
             room.spiritReadyAt = Infinity;
             room.spiritAnnouncementUntil = room.gameTime + 6;
             dirty = true;
@@ -1082,7 +1122,7 @@ class LobbyStore {
           }).sort(function (a, b) { return distance(spirit, a) - distance(spirit, b); })[0];
           if (!target) return;
           spirit.targetId = target.id;
-          this._moveSpiritToward(spirit, target, seconds);
+          this._moveSpiritToward(spirit, target, seconds, room.gameTime);
           if (distance(spirit, target) <= 380) {
             target.alive = false;
             target.botTarget = null;
@@ -1110,7 +1150,8 @@ class LobbyStore {
     const dist = Math.hypot(dx, dy);
     const previousX = bot.x;
     const previousY = bot.y;
-    const step = Math.min(590 * seconds, dist);
+    const speed = bot.role === 'CREW' ? BOT_CREW_SPEED : BOT_IMPOSTOR_SPEED;
+    const step = Math.min(speed * seconds, dist);
     if (Math.abs(dx) >= Math.abs(dy) && dx) bot.facing = dx < 0 ? 'left' : 'right';
     else if (dy) bot.facing = dy < 0 ? 'up' : 'down';
     bot.movingUntil = room.gameTime + 0.24;
@@ -1127,12 +1168,37 @@ class LobbyStore {
     return false;
   }
 
-  _moveSpiritToward(spirit, target, seconds) {
+  _unlockBotActionsIfReady(room) {
+    if (room.botActionsUnlocked) return;
+    const humansReady = Array.from(room.players.values()).filter(function (player) {
+      return !player.isBot;
+    }).every(function (player) { return player.introReady; });
+    if (!humansReady) return;
+    room.botActionsUnlocked = true;
+    room.players.forEach(function (bot) {
+      if (!bot.isBot || !bot.alive) return;
+      bot.botStartDelay = room.gameTime + 1;
+      if (bot.role !== 'IMPOSTOR') return;
+      bot.killReadyAt = room.gameTime + INITIAL_KILL_COOLDOWN;
+      bot.ventReadyAt = room.gameTime + BOT_SPECIAL_INITIAL_COOLDOWN;
+      bot.phantomUntil = 0;
+      bot.phantomReveal = null;
+      bot.phantomReadyAt = room.gameTime + BOT_SPECIAL_INITIAL_COOLDOWN;
+      bot.disguiseUntil = 0;
+      bot.disguiseTargetId = null;
+      bot.disguiseReadyAt = room.gameTime + BOT_SPECIAL_INITIAL_COOLDOWN;
+    });
+  }
+
+  _moveSpiritToward(spirit, target, seconds, gameTime) {
     const dx = target.x - spirit.x;
     const dy = target.y - spirit.y;
     const dist = Math.hypot(dx, dy);
     if (!dist) return;
-    const step = Math.min(700 * seconds, dist);
+    const age = Math.max(0, Number(gameTime || 0) - Number(spirit.spawnedAt || 0));
+    const speedIncrease = Math.floor(age / 10) * 0.05;
+    const speed = SPIRIT_BASE_SPEED * (1 + speedIncrease);
+    const step = Math.min(speed * seconds, dist);
     spirit.x = clamp(spirit.x + dx / dist * step, 0, WORLD.width);
     spirit.y = clamp(spirit.y + dy / dist * step, 0, WORLD.height);
   }
@@ -1158,6 +1224,7 @@ class LobbyStore {
     if (room.hostId === player.id) {
       room.hostId = Array.from(room.players.values()).find(function (p) { return !p.isBot; }).id;
     }
+    this._unlockBotActionsIfReady(room);
     this._checkWin(room);
     if (room.phase === 'MEETING') this._maybeResolveMeeting(room);
     this._touch(room);
@@ -1183,6 +1250,21 @@ class LobbyStore {
     if (!room) return [];
     return Array.from(room.players.values()).filter(function (p) { return !p.isBot; }).map(function (p) {
       return { playerId: p.id, view: roomView(room, p.id) };
+    });
+  }
+
+  listOpenRooms() {
+    return Array.from(this.rooms.values()).filter(function (room) {
+      return room.phase === 'LOBBY' && Array.from(room.players.values()).filter(function (player) {
+        return !player.isBot;
+      }).length < 20;
+    }).map(function (room) {
+      const humans = Array.from(room.players.values()).filter(function (player) { return !player.isBot; });
+      const host = room.players.get(room.hostId);
+      return { code: room.code, hostName: host ? host.nickname : 'Unknown', players: humans.length,
+        targetPlayers: room.settings.targetPlayers, impostors: room.settings.impostors };
+    }).sort(function (a, b) {
+      return b.players - a.players || a.hostName.localeCompare(b.hostName);
     });
   }
 
@@ -1270,6 +1352,7 @@ class LobbyStore {
     const observedAttackerId = attackerWasPhantom ? null : (activeDisguise ? activeDisguise.id : attacker.id);
     this._captureTrapIncident(room, attacker, target);
     target.alive = false;
+    target.isGhost = target.role === 'CREW' && !target.isBot;
     target.activeTaskId = null;
     target.botTarget = null;
     room.players.forEach(function (witness) {
@@ -1288,8 +1371,10 @@ class LobbyStore {
         witness.suspicionExpiresAt = room.gameTime + 45;
       }
     });
-    const remainingTasks = Math.max(0, target.taskGoal - target.tasksDone);
-    room.taskGoal = Math.max(room.tasksCompleted, room.taskGoal - remainingTasks);
+    if (!target.isGhost) {
+      const remainingTasks = Math.max(0, target.taskGoal - target.tasksDone);
+      room.taskGoal = Math.max(room.tasksCompleted, room.taskGoal - remainingTasks);
+    }
     room.bodies.push({ id: 'body-' + target.id + '-' + Math.round(room.gameTime * 10), playerId: target.id,
       nickname: target.nickname, color: target.color, x: target.x, y: target.y,
       meltAt: attacker.impostorRole === 'MELTER' ? room.gameTime + room.settings.meltDelay : null });
@@ -1420,6 +1505,7 @@ class LobbyStore {
         const ejected = room.players.get(entries[0][0]);
         if (ejected && ejected.alive) {
           ejected.alive = false;
+          ejected.isGhost = false;
           ejected.botTarget = null;
           room.taskGoal = Math.max(room.tasksCompleted, room.taskGoal - Math.max(0, ejected.taskGoal - ejected.tasksDone));
           result = { status: 'EJECTED', participation: participation, eligibleVoters: eligible, tally: tally,
@@ -1461,7 +1547,7 @@ class LobbyStore {
     return {
       id: id(8), token: id(24), nickname: nickname(input.nickname),
       color: COLORS.indexOf(input.color) >= 0 ? input.color : COLORS[0],
-      ready: false, connected: true, isBot: false, role: null, alive: true, killReadyAt: 0, ventReadyAt: 0, facing: 'down', movingUntil: 0, emergencyMeetingsUsed: 0,
+      ready: false, connected: true, isBot: false, role: null, alive: true, isGhost: false, killReadyAt: 0, ventReadyAt: 0, facing: 'down', movingUntil: 0, emergencyMeetingsUsed: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 0, completedTaskIds: new Set(), assignedTaskIds: new Set()
     };
   }
@@ -1474,7 +1560,7 @@ class LobbyStore {
     }) || COLORS[room.players.size % COLORS.length];
     const bot = {
       id: 'bot-' + id(5), token: null, nickname: name, color: color,
-      ready: true, connected: true, isBot: true, role: 'CREW', alive: true, killReadyAt: 0, ventReadyAt: 0, facing: 'down', movingUntil: 0, emergencyMeetingsUsed: 0,
+      ready: true, connected: true, isBot: true, role: 'CREW', alive: true, isGhost: false, killReadyAt: 0, ventReadyAt: 0, facing: 'down', movingUntil: 0, emergencyMeetingsUsed: 0,
       x: 15000, y: 8000, tasksDone: 0, taskGoal: 0, completedTaskIds: new Set(), assignedTaskIds: new Set(),
       botTarget: null, botWork: 0
     };
